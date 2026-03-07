@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DataSource, Session, Message, SchemaInfo } from '@/types';
+import type { DataSource, Session, Message, SchemaInfo, ThinkingEvent } from '@/types';
 import { apiService } from '@/services/api';
 
 interface AppState {
@@ -17,6 +17,7 @@ interface AppState {
   // UI 状态
   isTyping: boolean;
   thinkingMessage: string;
+  thinkingEvents: ThinkingEvent[];
 
   // 数据源操作
   fetchDataSources: () => Promise<void>;
@@ -35,6 +36,8 @@ interface AppState {
 
   // UI 操作
   setTyping: (isTyping: boolean, message?: string) => void;
+  addThinkingEvent: (event: ThinkingEvent) => void;
+  clearThinkingEvents: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -50,6 +53,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   isTyping: false,
   thinkingMessage: '',
+  thinkingEvents: [],
 
   // 数据源操作
   fetchDataSources: async () => {
@@ -138,15 +142,33 @@ export const useAppStore = create<AppState>((set, get) => ({
       messages: [...messages, userMessage],
       isTyping: true,
       thinkingMessage: '正在分析您的问题...',
+      thinkingEvents: [],
     });
 
     try {
-      const response = await apiService.sendMessage(currentSession.session_id, content);
+      // 使用流式 API
+      const response = await apiService.sendMessageStream(
+        currentSession.session_id,
+        content,
+        {
+          onEvent: (event) => {
+            get().addThinkingEvent(event);
+          },
+          onThinking: (message) => {
+            set({ thinkingMessage: message });
+          },
+          onError: (error) => {
+            console.error('Stream error:', error);
+          },
+        }
+      );
 
+      // 更新消息列表
       set((state) => ({
         messages: [...state.messages.filter(m => m.id !== userMessage.id), userMessage, response],
         isTyping: false,
         thinkingMessage: '',
+        thinkingEvents: [],
       }));
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : '发送消息失败';
@@ -164,6 +186,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ],
         isTyping: false,
         thinkingMessage: '',
+        thinkingEvents: [],
       }));
     }
   },
@@ -175,5 +198,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   // UI 操作
   setTyping: (isTyping, message = '') => {
     set({ isTyping, thinkingMessage: message });
+  },
+
+  addThinkingEvent: (event: ThinkingEvent) => {
+    set((state) => ({
+      thinkingEvents: [...state.thinkingEvents, event],
+    }));
+  },
+
+  clearThinkingEvents: () => {
+    set({ thinkingEvents: [] });
   },
 }));
