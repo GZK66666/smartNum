@@ -24,6 +24,7 @@ export default function DataSourcePage() {
   const {
     dataSources,
     currentDataSource,
+    schemaInfo,
     isLoadingDataSources,
     fetchDataSources,
     setCurrentDataSource,
@@ -170,13 +171,30 @@ export default function DataSourcePage() {
                 <div className="mt-4 pt-4 border-t border-slate-700/50 animate-fade-in">
                   <div className="flex items-center gap-2 text-sm text-slate-400 mb-3">
                     <Table2 className="w-4 h-4" />
-                    <span>数据库表</span>
+                    <span>数据库表 ({schemaInfo?.tables?.length || 0})</span>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {/* This would be populated from schema */}
-                    <span className="px-3 py-1 bg-slate-800 rounded-md text-sm text-slate-300">
-                      加载中...
-                    </span>
+                    {schemaInfo?.tables ? (
+                      schemaInfo.tables.slice(0, 10).map((table) => (
+                        <span
+                          key={table.name}
+                          className="px-3 py-1 bg-slate-800 rounded-md text-sm text-slate-300 hover:bg-slate-700 transition-colors cursor-default"
+                          title={table.comment || table.name}
+                        >
+                          {table.name}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="px-3 py-1 bg-slate-800 rounded-md text-sm text-slate-400">
+                        <Loader2 className="w-3 h-3 inline mr-1 animate-spin" />
+                        加载中...
+                      </span>
+                    )}
+                    {schemaInfo?.tables && schemaInfo.tables.length > 10 && (
+                      <span className="px-3 py-1 text-sm text-slate-500">
+                        +{schemaInfo.tables.length - 10} 更多...
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
