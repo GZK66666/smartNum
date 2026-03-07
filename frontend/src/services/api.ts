@@ -152,7 +152,7 @@ class ApiService {
 
         for (const line of lines) {
           if (line.startsWith('event:')) {
-            const eventType = line.slice(7).trim() as SSEEventType;
+            // 事件类型已解析，后续处理
             continue;
           }
           if (line.startsWith('data:')) {
@@ -184,9 +184,6 @@ class ApiService {
     return eventSource;
   }
 }
-
-// SSE Event Type
-type SSEEventType = 'thinking' | 'sql' | 'result' | 'done' | 'error';
 
 export const apiService = new ApiService();
 export default apiService;

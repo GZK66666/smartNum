@@ -9,9 +9,14 @@ import {
   Database,
   Code,
   Table,
+  BarChart2,
+  Brain,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import DataTable from '@/components/DataTable';
+import ChartViewer from '@/components/ChartViewer';
+import ThinkingProcess from '@/components/ThinkingProcess';
+import ExportButton from '@/components/ExportButton';
 import type { Message } from '@/types';
 
 export default function ChatPage() {
@@ -173,6 +178,7 @@ export default function ChatPage() {
 function MessageBubble({ message }: { message: Message }) {
   const [copied, setCopied] = useState(false);
   const [showSql, setShowSql] = useState(false);
+  const [activeTab, setActiveTab] = useState<'table' | 'chart'>('table');
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -191,10 +197,32 @@ function MessageBubble({ message }: { message: Message }) {
     );
   }
 
-  // Assistant message
+  // 判断是否显示图表
+  const showChart = message.visualization && message.result && message.result.rows.length > 0;
+
   return (
     <div className="flex justify-start space-y-3">
       <div className="message-bubble message-assistant max-w-full">
+        {/* Agent Type Badge */}
+        {message.agent_type && message.agent_type !== 'text2sql' && (
+          <div className="mb-2">
+            <span className={`text-xs px-2 py-0.5 rounded-full ${
+              message.agent_type === 'chitchat'
+                ? 'bg-blue-400/20 text-blue-300'
+                : message.agent_type === 'analysis'
+                ? 'bg-purple-400/20 text-purple-300'
+                : 'bg-slate-600 text-slate-300'
+            }`}>
+              {message.agent_type === 'chitchat' ? '闲聊' : message.agent_type === 'analysis' ? '数据分析' : message.agent_type}
+            </span>
+          </div>
+        )}
+
+        {/* Thinking Process */}
+        {message.thinking_process && message.thinking_process.length > 0 && (
+          <ThinkingProcess events={message.thinking_process} />
+        )}
+
         {/* Error */}
         {message.error && (
           <div className="text-red-400 mb-2">
@@ -239,9 +267,84 @@ function MessageBubble({ message }: { message: Message }) {
           </div>
         )}
 
-        {/* Result Table */}
+        {/* Analysis Result */}
+        {message.analysis && (
+          <div className="mb-3 p-3 bg-purple-400/10 border border-purple-400/20 rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <Brain className="w-4 h-4 text-purple-400" />
+              <span className="text-sm font-medium text-purple-300">数据分析</span>
+            </div>
+            <div className="space-y-2">
+              {message.analysis.insights.map((insight, i) => (
+                <div
+                  key={i}
+                  className={`p-2 rounded border-l-2 ${
+                    insight.importance === 'high'
+                      ? 'border-red-400 bg-red-400/10'
+                      : insight.importance === 'medium'
+                      ? 'border-yellow-400 bg-yellow-400/10'
+                      : 'border-slate-400 bg-slate-700/50'
+                  }`}
+                >
+                  <div className="text-sm font-medium text-slate-300">{insight.title}</div>
+                  <div className="text-xs text-slate-400 mt-1">{insight.content}</div>
+                </div>
+              ))}
+              {message.analysis.recommendations.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-xs text-slate-500 mb-1">建议:</div>
+                  <ul className="text-xs text-slate-400 space-y-1">
+                    {message.analysis.recommendations.map((rec, i) => (
+                      <li key={i} className="flex items-start gap-1">
+                        <span className="text-primary-400">•</span>
+                        {rec}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Result Table/Chart */}
         {message.result && message.result.rows.length > 0 && (
           <div className="mt-3">
+            {/* Tabs and Export */}
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setActiveTab('table')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                    activeTab === 'table'
+                      ? 'bg-primary-500/20 text-primary-400'
+                      : 'text-slate-400 hover:text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  <Table className="w-4 h-4" />
+                  表格
+                </button>
+                {showChart && (
+                  <button
+                    onClick={() => setActiveTab('chart')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                      activeTab === 'chart'
+                        ? 'bg-primary-500/20 text-primary-400'
+                        : 'text-slate-400 hover:text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    <BarChart2 className="w-4 h-4" />
+                    图表
+                  </button>
+                )}
+              </div>
+              <ExportButton
+                data={message.result}
+                filename={`query_${message.id}`}
+              />
+            </div>
+
+            {/* Stats */}
             <div className="flex items-center gap-2 mb-2 text-sm text-slate-400">
               <Table className="w-4 h-4" />
               <span>
@@ -249,7 +352,16 @@ function MessageBubble({ message }: { message: Message }) {
                 {message.result.truncated && ' (已截断)'}
               </span>
             </div>
-            <DataTable result={message.result} />
+
+            {/* Content */}
+            {activeTab === 'table' ? (
+              <DataTable result={message.result} />
+            ) : showChart ? (
+              <ChartViewer
+                data={message.result}
+                suggestion={message.visualization!}
+              />
+            ) : null}
           </div>
         )}
       </div>

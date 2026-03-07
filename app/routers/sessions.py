@@ -1,7 +1,7 @@
 """会话管理路由"""
 
 from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from app.models import (
     ApiResponse,
     SessionCreate,
@@ -9,8 +9,10 @@ from app.models import (
     MessageCreate,
     MessageHistory,
     ErrorCode,
+    ExportRequest,
 )
 from app.services import session_service
+from app.services.export_service import export_data
 
 router = APIRouter(prefix="/api/sessions", tags=["会话管理"])
 
@@ -104,3 +106,78 @@ async def get_messages(session_id: str, limit: int = 20):
             },
         )
     return ApiResponse(data=history)
+
+
+@router.post("/{session_id}/export")
+async def export_session_result(
+    session_id: str,
+    data: ExportRequest,
+):
+    """
+    导出最近查询结果
+
+    将最近一次查询的结果导出为 CSV 或 Excel 格式。
+    """
+    # 获取会话
+    session = await session_service.get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": ErrorCode.SESSION_NOT_FOUND,
+                "message": "会话不存在",
+            },
+        )
+
+    # 获取最近的有结果的消息
+    result_data = None
+    for msg in reversed(session.get("messages", [])):
+        if msg.get("role") == "assistant" and msg.get("result"):
+            result_data = msg["result"]
+            break
+
+    if result_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": ErrorCode.EXPORT_DATA_NOT_FOUND,
+                "message": "没有可导出的数据",
+            },
+        )
+
+    # 执行导出
+    try:
+        columns = result_data.get("columns", [])
+        rows = result_data.get("rows", [])
+
+        content, filename, mime_type = export_data(
+            columns=columns,
+            rows=rows,
+            format=data.format,
+            filename=data.filename,
+        )
+
+        return Response(
+            content=content,
+            media_type=mime_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": ErrorCode.EXPORT_DATA_TOO_LARGE,
+                "message": str(e),
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": ErrorCode.EXPORT_DATA_NOT_FOUND,
+                "message": f"导出失败: {str(e)}",
+            },
+        )

@@ -181,3 +181,29 @@ class ErrorCode:
     # 请求相关错误
     INVALID_REQUEST = 4001
     DATASOURCE_NOT_FOUND = 4002
+
+    # 导出相关错误
+    EXPORT_DATA_NOT_FOUND = 5001
+    EXPORT_FORMAT_UNSUPPORTED = 5002
+    EXPORT_DATA_TOO_LARGE = 5003
+
+
+# ==================== 导出相关模型 ====================
+
+class ExportFormat(str, Enum):
+    """导出格式"""
+    CSV = "csv"
+    EXCEL = "excel"
+
+
+class ExportRequest(BaseModel):
+    """导出请求"""
+    format: ExportFormat = Field(ExportFormat.CSV, description="导出格式")
+    filename: Optional[str] = Field(None, description="文件名（不含扩展名）")
+
+
+class ExportLimit:
+    """导出限制"""
+    MAX_ROWS = 100000  # 最大行数
+    MAX_COLUMNS = 100  # 最大列数
+    MAX_FILE_SIZE_MB = 50  # 最大文件大小 MB
