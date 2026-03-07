@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAppStore } from '@/store';
+import type { TableInfo } from '@/types';
 import {
   Database,
   Plus,
@@ -11,6 +12,11 @@ import {
   CheckCircle2,
   XCircle,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  Columns,
+  Key,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -31,11 +37,21 @@ export default function DataSourcePage() {
     deleteDataSource,
   } = useAppStore();
 
+  // 展开状态
+  const [showAllTables, setShowAllTables] = useState(false);
+  const [selectedTable, setSelectedTable] = useState<TableInfo | null>(null);
+
   useEffect(() => {
     fetchDataSources().catch(() => {
       toast.error('获取数据源列表失败');
     });
   }, [fetchDataSources]);
+
+  // 当切换数据源时重置展开状态
+  useEffect(() => {
+    setShowAllTables(false);
+    setSelectedTable(null);
+  }, [currentDataSource?.id]);
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`确定要删除数据源 "${name}" 吗？`)) return;
@@ -58,6 +74,10 @@ export default function DataSourcePage() {
         return <XCircle className="w-4 h-4 text-slate-400" />;
     }
   };
+
+  const displayedTables = schemaInfo?.tables
+    ? (showAllTables ? schemaInfo.tables : schemaInfo.tables.slice(0, 10))
+    : [];
 
   return (
     <div className="space-y-8">
@@ -175,27 +195,112 @@ export default function DataSourcePage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {schemaInfo?.tables ? (
-                      schemaInfo.tables.slice(0, 10).map((table) => (
-                        <span
-                          key={table.name}
-                          className="px-3 py-1 bg-slate-800 rounded-md text-sm text-slate-300 hover:bg-slate-700 transition-colors cursor-default"
-                          title={table.comment || table.name}
-                        >
-                          {table.name}
-                        </span>
-                      ))
+                      <>
+                        {displayedTables.map((table) => (
+                          <button
+                            key={table.name}
+                            className={`px-3 py-1 rounded-md text-sm transition-colors ${
+                              selectedTable?.name === table.name
+                                ? 'bg-primary-600 text-white'
+                                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                            }`}
+                            title={table.comment || table.name}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedTable(selectedTable?.name === table.name ? null : table);
+                            }}
+                          >
+                            {table.name}
+                          </button>
+                        ))}
+                        {schemaInfo.tables.length > 10 && (
+                          <button
+                            className="px-3 py-1 text-sm text-primary-400 hover:text-primary-300 transition-colors"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowAllTables(!showAllTables);
+                            }}
+                          >
+                            {showAllTables ? (
+                              <span className="flex items-center gap-1">
+                                <ChevronUp className="w-4 h-4" />
+                                收起
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1">
+                                <ChevronDown className="w-4 h-4" />
+                                +{schemaInfo.tables.length - 10} 更多...
+                              </span>
+                            )}
+                          </button>
+                        )}
+                      </>
                     ) : (
                       <span className="px-3 py-1 bg-slate-800 rounded-md text-sm text-slate-400">
                         <Loader2 className="w-3 h-3 inline mr-1 animate-spin" />
                         加载中...
                       </span>
                     )}
-                    {schemaInfo?.tables && schemaInfo.tables.length > 10 && (
-                      <span className="px-3 py-1 text-sm text-slate-500">
-                        +{schemaInfo.tables.length - 10} 更多...
-                      </span>
-                    )}
                   </div>
+
+                  {/* Table Details */}
+                  {selectedTable && (
+                    <div className="mt-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700 animate-fade-in">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-medium text-slate-200 flex items-center gap-2">
+                          <Columns className="w-4 h-4" />
+                          {selectedTable.name}
+                          {selectedTable.comment && (
+                            <span className="text-sm text-slate-400 font-normal">
+                              - {selectedTable.comment}
+                            </span>
+                          )}
+                        </h4>
+                        <button
+                          className="p-1 text-slate-400 hover:text-slate-200 transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedTable(null);
+                          }}
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="text-left py-2 px-3 text-slate-400 font-medium">列名</th>
+                              <th className="text-left py-2 px-3 text-slate-400 font-medium">类型</th>
+                              <th className="text-left py-2 px-3 text-slate-400 font-medium">可空</th>
+                              <th className="text-left py-2 px-3 text-slate-400 font-medium">键</th>
+                              <th className="text-left py-2 px-3 text-slate-400 font-medium">说明</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selectedTable.columns.map((col) => (
+                              <tr key={col.name} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                <td className="py-2 px-3 text-slate-200 flex items-center gap-2">
+                                  {col.key === 'PRI' && <Key className="w-3 h-3 text-yellow-400" />}
+                                  {col.name}
+                                </td>
+                                <td className="py-2 px-3 text-slate-400 font-mono text-xs">{col.type}</td>
+                                <td className="py-2 px-3">
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                    col.nullable ? 'bg-slate-700 text-slate-400' : 'bg-red-900/50 text-red-400'
+                                  }`}>
+                                    {col.nullable ? '是' : '否'}
+                                  </span>
+                                </td>
+                                <td className="py-2 px-3 text-slate-400">{col.key || '-'}</td>
+                                <td className="py-2 px-3 text-slate-500">{col.comment || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
