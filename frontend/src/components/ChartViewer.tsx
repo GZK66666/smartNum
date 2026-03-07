@@ -37,6 +37,7 @@ export default function ChartViewer({
   const chartInstance = useRef<echarts.ECharts | null>(null);
   const [currentType, setCurrentType] = useState<ChartType>(suggestion.chart_type);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   // 获取数据字段索引
   const getFieldIndex = (field: string) => {
@@ -306,6 +307,7 @@ export default function ChartViewer({
     link.href = url;
     link.download = `${suggestion.title || 'chart'}.${format}`;
     link.click();
+    setShowExportMenu(false);
   };
 
   // 切换全屏
@@ -341,24 +343,35 @@ export default function ChartViewer({
         </div>
 
         {/* 导出按钮 */}
-        <div className="relative group">
-          <button className="p-2 text-slate-400 hover:text-slate-300 hover:bg-slate-700 rounded-lg">
+        <div className="relative">
+          <button
+            onClick={() => setShowExportMenu(!showExportMenu)}
+            className="p-2 text-slate-400 hover:text-slate-300 hover:bg-slate-700 rounded-lg"
+          >
             <Download className="w-4 h-4" />
           </button>
-          <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-slate-800 border border-slate-700 rounded-lg py-1 min-w-[100px]">
-            <button
-              onClick={() => exportImage('png')}
-              className="px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700 text-left"
-            >
-              导出 PNG
-            </button>
-            <button
-              onClick={() => exportImage('svg')}
-              className="px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700 text-left"
-            >
-              导出 SVG
-            </button>
-          </div>
+          {showExportMenu && (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setShowExportMenu(false)}
+              />
+              <div className="absolute right-0 top-full mt-1 z-20 flex flex-col bg-slate-800 border border-slate-700 rounded-lg py-1 min-w-[100px]">
+                <button
+                  onClick={() => exportImage('png')}
+                  className="px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700 text-left whitespace-nowrap"
+                >
+                  导出 PNG
+                </button>
+                <button
+                  onClick={() => exportImage('svg')}
+                  className="px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700 text-left whitespace-nowrap"
+                >
+                  导出 SVG
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         {/* 全屏按钮 */}

@@ -1,5 +1,6 @@
 """会话服务"""
 
+import json
 import uuid
 from datetime import datetime
 from typing import AsyncGenerator, Optional
@@ -159,9 +160,9 @@ async def send_message_stream(session_id: str, content: str) -> AsyncGenerator[s
         if event.get("type") == "done":
             result = event.get("data")
 
-        # 发送 SSE 事件
+        # 发送 SSE 事件 (使用 JSON 序列化)
         yield f"event: {event.get('type', 'message')}\n"
-        yield f"data: {event}\n\n"
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     # 添加助手消息
     if result:
