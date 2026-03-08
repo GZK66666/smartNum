@@ -1,21 +1,22 @@
-"""DeepAgents Text2SQL 智能体服务 - v1.1 泛化智能体架构"""
+"""DeepAgents 统一智能体服务 - v2.0 架构
+
+核心设计原则：
+- 单一 DeepAgent 处理所有用户请求
+- 充分利用 DeepAgents 的 loop 能力
+- Agent 自主决定使用哪些工具
+- SSE 流式输出适配
+"""
 
 import json
 import uuid
 from datetime import datetime
-from typing import Any, AsyncGenerator, Optional, List, Dict
+from typing import Any, AsyncGenerator, Optional, List
 from dataclasses import dataclass, asdict
+import asyncio
 
 from app.core import get_settings
-from app.services import db_service, datasource_service
-from app.agents.router_agent import route_question, AgentType, RouteResult
-from app.agents.chitchat_agent import process_chitchat
-from app.agents.analysis_agent import process_analysis, AnalysisResult
 
 settings = get_settings()
-
-# Schema 缓存
-_schema_cache: dict[str, dict] = {}
 
 
 # ==================== SSE 事件类型定义 ====================
@@ -35,18 +36,17 @@ class SSEEvent:
 
 
 @dataclass
-class RouteEvent(SSEEvent):
-    """路由事件"""
-    type: str = "route"
-    agent: str = None
-    confidence: float = None
-
-
-@dataclass
 class ThinkingEvent(SSEEvent):
     """思考事件"""
     type: str = "thinking"
     content: str = None
+
+
+@dataclass
+class PlanEvent(SSEEvent):
+    """计划事件"""
+    type: str = "plan"
+    todos: List[dict] = None
 
 
 @dataclass
@@ -107,15 +107,6 @@ class MessageEvent(SSEEvent):
 
 
 @dataclass
-class AnalysisEvent(SSEEvent):
-    """分析事件"""
-    type: str = "analysis"
-    insights: List[dict] = None
-    recommendations: List[str] = None
-    summary: str = None
-
-
-@dataclass
 class ErrorEvent(SSEEvent):
     """错误事件"""
     type: str = "error"
@@ -130,197 +121,91 @@ class DoneEvent(SSEEvent):
     message: str = "处理完成"
 
 
-# ==================== 可视化建议 ====================
+# ==================== 系统提示词 ====================
 
-def _analyze_visualization_intent(question: str, columns: List[str], rows: List[List[Any]]) -> Optional[dict]:
-    """
-    分析可视化意图，生成图表建议。
-    """
-    if not columns or not rows:
-        return None
+SYSTEM_PROMPT = """你是 smartNum 智能数据分析助手，一个专业、全能的数据分析专家。
 
-    # 问题关键词
-    question_lower = question.lower()
+## 你的能力
 
-    # 检测图表类型意图
-    chart_type = None
-    confidence = 0.5
+1. **数据查询**：帮助用户用自然语言查询数据库
+2. **数据分析**：提供数据洞察、趋势分析、异常检测
+3. **数据可视化**：自动生成图表展示数据
+4. **智能对话**：友好地回答用户问题
 
-    # 趋势分析 -> 折线图
-    if any(word in question_lower for word in ["趋势", "变化", "走势", "增长", "下降", "随时间"]):
-        chart_type = "line"
-        confidence = 0.85
-    # 对比分析 -> 柱状图
-    elif any(word in question_lower for word in ["对比", "比较", "各", "每个", "不同"]):
-        chart_type = "bar"
-        confidence = 0.85
-    # 占比分析 -> 饼图
-    elif any(word in question_lower for word in ["占比", "比例", "百分比", "构成"]):
-        chart_type = "pie"
-        confidence = 0.85
-    # 排名分析 -> 横向柱状图
-    elif any(word in question_lower for word in ["前", "排名", "最多", "最少", "top"]):
-        chart_type = "bar"
-        confidence = 0.8
-    # 分布分析 -> 直方图
-    elif any(word in question_lower for word in ["分布", "区间"]):
-        chart_type = "histogram"
-        confidence = 0.8
-    # 关联分析 -> 散点图
-    elif any(word in question_lower for word in ["关系", "相关", "影响"]):
-        chart_type = "scatter"
-        confidence = 0.8
+## 工作原则
 
-    # 基于数据特征推断
-    if chart_type is None:
-        num_cols = len(columns)
-        num_rows = len(rows)
+### 数据查询
+- 首先使用 get_schema 了解数据库结构
+- 根据用户问题生成正确的 SQL
+- 使用 run_sql 执行查询
+- 解释查询结果，突出关键信息
 
-        # 时间列检测
-        time_keywords = ["date", "time", "日期", "时间", "year", "month", "day"]
-        has_time_col = any(kw in col.lower() for col in columns for kw in time_keywords)
+### 数据分析
+- 基于查询结果进行深入分析
+- 识别数据中的模式、趋势和异常
+- 提供有价值的洞察和建议
+- 使用具体数据支撑分析结论
 
-        # 数值列检测
-        numeric_cols = []
-        for i, col in enumerate(columns):
-            if rows and isinstance(rows[0][i], (int, float)):
-                numeric_cols.append(col)
+### 数据可视化
+- 根据数据特征和用户意图选择合适的图表类型
+- 折线图：展示趋势变化
+- 柱状图：对比分析
+- 饼图：占比分析
+- 散点图：关联分析
 
-        if has_time_col and numeric_cols:
-            chart_type = "line"
-            confidence = 0.75
-        elif num_cols == 2 and numeric_cols:
-            chart_type = "bar"
-            confidence = 0.7
-        elif len(numeric_cols) >= 2:
-            chart_type = "scatter"
-            confidence = 0.65
-        else:
-            return None  # 无法推断
+### 对话交互
+- 简洁友好，不过度啰嗦
+- 主动引导用户使用你的核心能力
+- 用中文回复
 
-    # 构建建议
-    suggestion = {
-        "chart_type": chart_type,
-        "title": _generate_chart_title(question),
-        "confidence": confidence,
-    }
+## 安全规则
 
-    # 设置坐标轴
-    if columns:
-        # 第一列通常是 X 轴（类别/时间）
-        suggestion["x_axis"] = {
-            "field": columns[0],
-            "label": columns[0],
-            "type": _infer_axis_type(columns[0], rows[0][0] if rows else None)
-        }
+- 只执行 SELECT 查询，禁止 DELETE/UPDATE/INSERT
+- 不查询敏感表（如密码表）
+- 不暴露敏感数据（如手机号、身份证）
+- 大结果集提示用户添加筛选条件
 
-        # 数值列作为 Y 轴
-        for col in columns[1:]:
-            if rows and isinstance(rows[0][columns.index(col)], (int, float)):
-                suggestion["y_axis"] = {
-                    "field": col,
-                    "label": col,
-                    "type": "number"
-                }
-                break
+## 决策流程
 
-        if "y_axis" not in suggestion and len(columns) > 1:
-            suggestion["y_axis"] = {
-                "field": columns[1],
-                "label": columns[1],
-                "type": "number"
-            }
-
-    return suggestion
+1. 分析用户问题的意图（查询/分析/闲聊）
+2. 根据意图选择合适的工具和策略
+3. 执行操作并获取结果
+4. 综合分析并生成回答
+5. 如果需要，继续迭代直到任务完成
+"""
 
 
-def _infer_axis_type(field_name: str, sample_value: Any) -> str:
-    """推断坐标轴类型"""
-    if sample_value is None:
-        return "category"
+# ==================== 核心工具定义 ====================
 
-    if isinstance(sample_value, (int, float)):
-        # 检查是否是日期数值
-        if isinstance(sample_value, int) and sample_value > 19000000:
-            return "datetime"
-        return "number"
-
-    if isinstance(sample_value, str):
-        # 检查是否是日期字符串
-        if any(kw in field_name.lower() for kw in ["date", "time", "日期", "时间"]):
-            return "datetime"
-
-    return "category"
-
-
-def _generate_chart_title(question: str) -> str:
-    """生成图表标题"""
-    # 简单处理：取问题前30个字符
-    if len(question) > 30:
-        return question[:30] + "..."
-    return question
-
-
-def _get_llm():
-    """获取 LLM 实例 (OpenAI 兼容格式)"""
-    from langchain_openai import ChatOpenAI
-
-    return ChatOpenAI(
-        model=settings.llm_model_name,
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        temperature=settings.llm_temperature,
-        max_tokens=settings.llm_max_tokens,
-    )
-
-
-def _get_streaming_llm():
-    """获取流式 LLM 实例"""
-    from langchain_openai import ChatOpenAI
-
-    return ChatOpenAI(
-        model=settings.llm_model_name,
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        temperature=settings.llm_temperature,
-        max_tokens=settings.llm_max_tokens,
-        streaming=True,
-    )
-
-
-# ==================== 智能体工具 ====================
-
-def explore_schema_tool(
+def get_schema(
     datasource_id: str,
     table_pattern: Optional[str] = None,
-    column_pattern: Optional[str] = None,
 ) -> str:
     """
-    探索数据库 Schema，支持模糊匹配表名和列名。
+    获取数据库 Schema 信息。
 
     Args:
         datasource_id: 数据源ID
-        table_pattern: 表名匹配模式（支持通配符 %）
-        column_pattern: 列名匹配模式（支持通配符 %）
+        table_pattern: 表名匹配模式（支持通配符 %），可选
 
     Returns:
-        匹配的表结构信息（Markdown格式）
+        数据库表结构信息（Markdown格式）
     """
-    import asyncio
 
     async def _get_schema():
+        from app.services import datasource_service
         schema_info = await datasource_service.get_schema(datasource_id)
         if schema_info is None:
             return "错误: 数据源不存在或无法获取 Schema"
 
         lines = ["# 数据库 Schema\n"]
+        import fnmatch
 
         for table in schema_info.tables:
             table_name = table.name
 
             # 表名过滤
             if table_pattern:
-                import fnmatch
                 if not fnmatch.fnmatch(table_name.lower(), table_pattern.lower()):
                     continue
 
@@ -333,19 +218,11 @@ def explore_schema_tool(
             lines.append("|------|------|------|-----|------|")
 
             for col in table.columns:
-                col_name = col.name
-
-                # 列名过滤
-                if column_pattern:
-                    import fnmatch
-                    if not fnmatch.fnmatch(col_name.lower(), column_pattern.lower()):
-                        continue
-
                 nullable = "是" if col.nullable else "否"
                 key = col.key or "-"
                 comment = col.comment or "-"
 
-                lines.append(f"| {col_name} | {col.type} | {nullable} | {key} | {comment} |")
+                lines.append(f"| {col.name} | {col.type} | {nullable} | {key} | {comment} |")
 
         return "\n".join(lines)
 
@@ -357,7 +234,6 @@ def explore_schema_tool(
         asyncio.set_event_loop(loop)
 
     if loop.is_running():
-        # 如果在异步上下文中，需要特殊处理
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(asyncio.run, _get_schema())
@@ -366,7 +242,7 @@ def explore_schema_tool(
         return loop.run_until_complete(_get_schema())
 
 
-def execute_sql_tool(
+def run_sql(
     datasource_id: str,
     sql: str,
     limit: int = 1000,
@@ -377,14 +253,14 @@ def execute_sql_tool(
     Args:
         datasource_id: 数据源ID
         sql: SQL 查询语句（仅支持 SELECT）
-        limit: 最大返回行数
+        limit: 最大返回行数，默认 1000
 
     Returns:
-        查询结果，包含列名和数据行
+        查询结果，包含 columns, rows, total, truncated 字段
     """
-    import asyncio
 
     async def _execute():
+        from app.services import datasource_service, db_service
         # 获取数据源
         ds = await datasource_service.get_datasource(datasource_id)
         if ds is None:
@@ -423,315 +299,142 @@ def execute_sql_tool(
         return loop.run_until_complete(_execute())
 
 
-# ==================== 智能体创建 ====================
+def generate_chart(
+    data: dict,
+    chart_type: str = "auto",
+    title: str = "",
+) -> dict:
+    """
+    根据数据生成图表配置。
 
-def create_text2sql_agent():
-    """创建 Text2SQL 智能体"""
-    try:
-        from deepagents import create_deep_agent
-    except ImportError:
-        # 如果 deepagents 不可用，返回 None
-        return None
+    Args:
+        data: 查询结果数据，包含 columns 和 rows
+        chart_type: 图表类型 (line/bar/pie/scatter/auto)，默认自动推断
+        title: 图表标题，可选
 
-    system_prompt = """你是一个专业的数据分析师助手。你的任务是帮助用户通过自然语言查询数据库。
+    Returns:
+        ECharts 图表配置
+    """
+    columns = data.get("columns", [])
+    rows = data.get("rows", [])
 
-## 工作流程
+    if not columns or not rows:
+        return {"error": "数据为空，无法生成图表"}
 
-1. **理解需求**：分析用户的问题，明确查询目标
-2. **探索Schema**：使用 explore_schema_tool 工具了解表结构
-3. **生成SQL**：根据 Schema 信息生成正确的 SQL
-4. **执行查询**：使用 execute_sql_tool 工具执行查询
-5. **解释结果**：用自然语言解释查询结果
+    # 自动推断图表类型
+    if chart_type == "auto":
+        chart_type = _infer_chart_type(columns, rows)
 
-## 工具使用
+    # 生成 ECharts 配置
+    option = _generate_echarts_option(columns, rows, chart_type, title)
 
-### explore_schema_tool
-用于探索数据库结构：
-- datasource_id: 数据源ID
-- table_pattern: 表名过滤（可选，支持 % 通配符）
-- column_pattern: 列名过滤（可选）
-
-### execute_sql_tool
-用于执行 SQL 查询：
-- datasource_id: 数据源ID
-- sql: SQL 语句（仅 SELECT）
-- limit: 最大返回行数（默认 1000）
-
-## 注意事项
-
-- 只生成 SELECT 语句，禁止 DELETE/UPDATE/INSERT
-- 对于复杂查询，先写子查询或 CTE
-- 如果 Schema 信息不完整，主动探索相关表
-- 解释结果时突出关键数据和趋势
-- 如果用户追问，基于上下文修改 SQL
-
-## 安全规则
-
-- 不查询敏感表（如用户密码表）
-- 不暴露敏感数据（如手机号、身份证）
-- 大结果集自动截断，提示用户添加筛选条件
-- 查询超时为 30 秒
-"""
-
-    # 使用 OpenAI 兼容的 LLM
-    llm = _get_llm()
-
-    agent = create_deep_agent(
-        name="text2sql",
-        tools=[explore_schema_tool, execute_sql_tool],
-        system_prompt=system_prompt,
-        llm=llm,
-    )
-
-    return agent
+    return {
+        "success": True,
+        "chart_type": chart_type,
+        "option": option,
+    }
 
 
-# 全局智能体实例
+def _infer_chart_type(columns: List[str], rows: List[List[Any]]) -> str:
+    """推断图表类型"""
+    # 时间列检测
+    time_keywords = ["date", "time", "日期", "时间", "year", "month", "day"]
+    has_time_col = any(kw in col.lower() for col in columns for kw in time_keywords)
+
+    # 数值列检测
+    numeric_cols = []
+    for i, col in enumerate(columns):
+        if rows and isinstance(rows[0][i], (int, float)):
+            numeric_cols.append(col)
+
+    if has_time_col and numeric_cols:
+        return "line"
+    elif len(columns) == 2 and numeric_cols:
+        return "bar"
+    elif len(numeric_cols) >= 2:
+        return "scatter"
+    else:
+        return "bar"
+
+
+def _generate_echarts_option(
+    columns: List[str],
+    rows: List[List[Any]],
+    chart_type: str,
+    title: str,
+) -> dict:
+    """生成 ECharts 配置"""
+
+    # 提取 X 轴数据
+    x_data = [str(row[0]) for row in rows]
+
+    # 提取 Y 轴数据
+    y_data = []
+    for i, col in enumerate(columns[1:], 1):
+        y_data.append({
+            "name": col,
+            "type": chart_type if chart_type != "scatter" else "scatter",
+            "data": [row[i] for row in rows]
+        })
+
+    option = {
+        "title": {
+            "text": title or "数据图表"
+        },
+        "tooltip": {
+            "trigger": "axis" if chart_type in ["line", "bar"] else "item"
+        },
+        "legend": {
+            "data": [col for col in columns[1:]]
+        },
+        "xAxis": {
+            "type": "category",
+            "data": x_data
+        },
+        "yAxis": {
+            "type": "value"
+        },
+        "series": y_data
+    }
+
+    return option
+
+
+# ==================== DeepAgent 创建 ====================
+
 _agent = None
 
 
 def get_agent():
-    """获取智能体实例（单例）"""
+    """获取 DeepAgent 单例"""
     global _agent
-    if _agent is None:
-        _agent = create_text2sql_agent()
+    if _agent is not None:
+        return _agent
+
+    from deepagents import create_deep_agent
+    from langchain_openai import ChatOpenAI
+
+    # 创建 OpenAI 兼容的 LLM（支持阿里百炼等）
+    llm = ChatOpenAI(
+        model=settings.llm_model_name,
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+    )
+
+    # 创建智能体
+    _agent = create_deep_agent(
+        name="smartnum-agent",
+        model=llm,
+        tools=[get_schema, run_sql, generate_chart],
+        system_prompt=SYSTEM_PROMPT,
+    )
+
     return _agent
 
 
-# ==================== 服务接口 ====================
-
-def _format_schema_for_prompt(schema_info) -> str:
-    """将 Schema 格式化为提示文本"""
-    lines = []
-    lines.append("# 数据库 Schema\n")
-
-    for table in schema_info.tables:
-        table_name = table.name
-        table_comment = table.comment or ""
-        lines.append(f"\n## 表: {table_name}")
-        if table_comment:
-            lines.append(f"说明: {table_comment}")
-
-        lines.append("列:")
-        for col in table.columns:
-            col_name = col.name
-            col_type = col.type
-            col_comment = col.comment or ""
-            nullable = "可空" if col.nullable else "非空"
-            key_info = f" [{col.key}]" if col.key else ""
-
-            col_desc = f"  - {col_name}: {col_type} ({nullable}){key_info}"
-            if col_comment:
-                col_desc += f" - {col_comment}"
-            lines.append(col_desc)
-
-    return "\n".join(lines)
-
-
-async def _get_schema_text(datasource_id: str) -> str:
-    """获取 Schema 信息文本"""
-    from datetime import datetime, timedelta
-
-    # 检查缓存
-    if datasource_id in _schema_cache:
-        cache = _schema_cache[datasource_id]
-        if datetime.utcnow() - cache["loaded_at"] < timedelta(minutes=5):
-            return cache["schema_text"]
-
-    # 从服务获取
-    schema_info = await datasource_service.get_schema(datasource_id)
-
-    if schema_info is None:
-        return "错误: 无法获取 Schema 信息"
-
-    schema_text = _format_schema_for_prompt(schema_info)
-    _schema_cache[datasource_id] = {
-        "schema_text": schema_text,
-        "loaded_at": datetime.utcnow(),
-    }
-
-    return schema_text
-
-
-def _extract_sql(content: str) -> Optional[str]:
-    """从响应中提取 SQL"""
-    import re
-
-    # 匹配 ```sql ... ``` 格式
-    pattern = r"```sql\s*(.*?)\s*```"
-    match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
-
-    if match:
-        return match.group(1).strip()
-
-    # 匹配 SELECT ... 语句
-    pattern = r"(SELECT\s+.*?)(?:;|$)"
-    match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
-
-    if match:
-        return match.group(1).strip()
-
-    return None
-
-
-async def process_query(
-    datasource_id: str,
-    db_type: str,
-    host: str,
-    port: int,
-    database: str,
-    username: str,
-    password: str,
-    schema_name: Optional[str],
-    query: str,
-    context: dict,
-    history: list[dict],
-) -> dict:
-    """处理用户查询"""
-    try:
-        # 获取 Schema
-        schema_text = await _get_schema_text(datasource_id)
-
-        # 尝试使用 DeepAgents
-        agent = get_agent()
-        if agent is not None:
-            # 使用 DeepAgents 框架
-            messages = []
-            for msg in history[-10:]:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"],
-                })
-            messages.append({"role": "user", "content": query})
-
-            # 调用智能体
-            result = agent.invoke({
-                "messages": messages,
-                "datasource_id": datasource_id,
-            })
-
-            # 提取响应
-            last_message = result.get("messages", [])[-1] if result.get("messages") else None
-            if last_message:
-                content = last_message.content if hasattr(last_message, 'content') else str(last_message)
-            else:
-                content = "未能生成响应"
-
-            sql = _extract_sql(content)
-
-            # 执行 SQL
-            result_data = None
-            if sql:
-                query_result = await db_service.execute_query(
-                    db_type=db_type,
-                    host=host,
-                    port=port,
-                    database=database,
-                    username=username,
-                    password=password,
-                    sql=sql,
-                )
-
-                if query_result["success"]:
-                    result_data = {
-                        "columns": query_result["columns"],
-                        "rows": query_result["rows"],
-                        "total": query_result["total"],
-                        "truncated": query_result["truncated"],
-                    }
-                else:
-                    return {
-                        "content": f"SQL 执行失败: {query_result['error']}",
-                        "sql": sql,
-                        "error": query_result["error"],
-                    }
-
-            return {
-                "content": content,
-                "sql": sql,
-                "result": result_data,
-            }
-
-        # 回退：使用 LangChain OpenAI 兼容格式调用
-        llm = _get_llm()
-
-        system_prompt = f"""你是一个专业的数据分析师助手。你的任务是帮助用户通过自然语言查询数据库。
-
-{schema_text}
-
-## 工作流程
-
-1. **理解需求**：分析用户的问题，明确查询目标
-2. **生成SQL**：根据 Schema 信息生成正确的 SQL
-3. **解释结果**：用自然语言解释查询结果
-
-## 注意事项
-
-- 只生成 SELECT 语句，禁止 DELETE/UPDATE/INSERT
-- 对于复杂查询，先写子查询或 CTE
-- 如果用户追问，基于上下文修改 SQL
-- 解释结果时突出关键数据和趋势
-
-## 安全规则
-
-- 不查询敏感表（如用户密码表）
-- 不暴露敏感数据（如手机号、身份证）
-- 大结果集自动截断，提示用户添加筛选条件
-"""
-
-        # 构建消息
-        messages = [("system", system_prompt)]
-        for msg in history[-10:]:
-            messages.append((msg["role"], msg["content"]))
-
-        # 添加当前问题
-        messages.append(("user", query))
-
-        response = await llm.ainvoke(messages)
-
-        # 提取 SQL
-        content = response.content
-        sql = _extract_sql(content)
-
-        # 执行 SQL
-        result = None
-        if sql:
-            query_result = await db_service.execute_query(
-                db_type=db_type,
-                host=host,
-                port=port,
-                database=database,
-                username=username,
-                password=password,
-                sql=sql,
-            )
-
-            if query_result["success"]:
-                result = {
-                    "columns": query_result["columns"],
-                    "rows": query_result["rows"],
-                    "total": query_result["total"],
-                    "truncated": query_result["truncated"],
-                }
-            else:
-                return {
-                    "content": f"SQL 执行失败: {query_result['error']}",
-                    "sql": sql,
-                    "error": query_result["error"],
-                }
-
-        return {
-            "content": content,
-            "sql": sql,
-            "result": result,
-        }
-
-    except Exception as e:
-        return {
-            "content": f"处理查询时出错: {str(e)}",
-            "error": str(e),
-        }
-
+# ==================== SSE 流式处理 ====================
 
 async def process_query_stream(
     datasource_id: str,
@@ -746,277 +449,285 @@ async def process_query_stream(
     context: dict,
     history: list[dict],
 ) -> AsyncGenerator[dict, None]:
-    """流式处理用户查询 - v1.1 泛化智能体架构"""
-    import time
-
-    # 1. 路由判断
-    yield RouteEvent(
-        agent=AgentType.TEXT2SQL.value,
-        confidence=0.0
-    ).to_dict()
-
-    # 使用路由智能体判断问题类型
-    route_result = route_question(query, context)
-    agent_type = route_result.agent
-
-    # 发送路由结果
-    yield RouteEvent(
-        agent=agent_type.value,
-        confidence=route_result.confidence
-    ).to_dict()
-
-    # 根据路由结果分发到不同智能体
-    if agent_type == AgentType.CHITCHAT:
-        async for event in _process_chitchat_stream(query, history):
-            yield event
-    elif agent_type == AgentType.ANALYSIS:
-        async for event in _process_analysis_stream(
-            query, datasource_id, db_type, host, port,
-            database, username, password, schema_name, context, history
-        ):
-            yield event
-    else:
-        # 默认走 Text2SQL
-        async for event in _process_text2sql_stream(
-            datasource_id, db_type, host, port,
-            database, username, password, schema_name, query, context, history
-        ):
-            yield event
-
-
-async def _process_chitchat_stream(
-    query: str,
-    history: list[dict],
-) -> AsyncGenerator[dict, None]:
-    """处理闲聊问题（流式）"""
-    # 发送思考事件
-    yield ThinkingEvent(content="正在理解您的问题...").to_dict()
-
-    # 调用闲聊智能体
-    response = process_chitchat(query, history=history)
-
-    # 发送消息事件
-    yield MessageEvent(content=response).to_dict()
-
-    # 发送完成事件
-    yield DoneEvent(message="回复完成").to_dict()
-
-
-async def _process_analysis_stream(
-    query: str,
-    datasource_id: str,
-    db_type: str,
-    host: str,
-    port: int,
-    database: str,
-    username: str,
-    password: str,
-    schema_name: Optional[str],
-    context: dict,
-    history: list[dict],
-) -> AsyncGenerator[dict, None]:
-    """处理分析问题（流式）"""
-    import time
-
-    # 发送思考事件
-    yield ThinkingEvent(content="正在分析您的问题，准备获取相关数据...").to_dict()
-
-    # 获取 Schema
-    schema_text = await _get_schema_text(datasource_id)
-
-    # 先执行查询获取数据
-    yield ThinkingEvent(content="正在获取相关数据进行分析...").to_dict()
-
-    # 生成 SQL 查询
-    sql_result = await _generate_sql_for_analysis(query, schema_text, history)
-
-    analysis_data = None
-    if sql_result.get("sql"):
-        yield SQLGenerationEvent(sql=sql_result["sql"]).to_dict()
-
-        # 执行 SQL
-        start_time = time.time()
-        yield SQLExecutionEvent(status="running").to_dict()
-
-        query_result = await db_service.execute_query(
-            db_type=db_type, host=host, port=port,
-            database=database, username=username, password=password,
-            sql=sql_result["sql"],
-        )
-
-        duration = time.time() - start_time
-        yield SQLExecutionEvent(status="completed", duration=duration).to_dict()
-
-        if query_result["success"]:
-            analysis_data = {
-                "columns": query_result["columns"],
-                "rows": query_result["rows"],
-                "total": query_result["total"],
-            }
-
-    # 进行分析
-    yield ThinkingEvent(content="正在分析数据，生成洞察...").to_dict()
-
-    analysis_result = process_analysis(
-        question=query,
-        data_context={"result": analysis_data, "sql": sql_result.get("sql")},
-        schema_text=schema_text,
-        history=history,
-    )
-
-    # 发送分析结果
-    yield AnalysisEvent(
-        insights=[{"title": i.title, "content": i.content, "importance": i.importance}
-                  for i in analysis_result.insights],
-        recommendations=analysis_result.recommendations,
-        summary=analysis_result.summary
-    ).to_dict()
-
-    # 发送完成事件
-    yield DoneEvent(message="分析完成").to_dict()
-
-
-async def _process_text2sql_stream(
-    datasource_id: str,
-    db_type: str,
-    host: str,
-    port: int,
-    database: str,
-    username: str,
-    password: str,
-    schema_name: Optional[str],
-    query: str,
-    context: dict,
-    history: list[dict],
-) -> AsyncGenerator[dict, None]:
-    """处理 Text2SQL 问题（流式）"""
-    import time
+    """流式处理用户查询 - v2.0 统一架构"""
 
     # 发送思考事件
     yield ThinkingEvent(content="正在分析您的问题...").to_dict()
 
-    # 获取 Schema
-    schema_text = await _get_schema_text(datasource_id)
+    # 使用 DeepAgent 流式处理
+    agent = get_agent()
 
-    yield ThinkingEvent(content="正在探索数据库 Schema...").to_dict()
+    # 使用唯一的 thread_id 确保每次调用独立
+    # 注意：不使用 checkpointer，所以每次调用是无状态的
+    thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
 
-    # 发送工具调用事件
-    tool_id = f"call_{uuid.uuid4().hex[:8]}"
-    yield ToolCallEvent(
-        tool="explore_schema",
-        input={"datasource_id": datasource_id},
-        id=tool_id
-    ).to_dict()
+    # 构建消息 - 包含历史对话以保持上下文
+    # 但要确保格式正确：只包含 role 和 content
+    messages = []
+    for msg in history[-10:]:
+        # 只提取 role 和 content，确保格式干净
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if content:  # 只添加有内容的消息
+            messages.append({"role": role, "content": content})
 
-    # 发送工具结果
-    yield ToolResultEvent(
-        tool="explore_schema",
-        id=tool_id,
-        output=f"已加载 {len(schema_text)} 字符的 Schema 信息"
-    ).to_dict()
+    # 添加当前问题
+    messages.append({"role": "user", "content": f"[数据源ID: {datasource_id}] {query}"})
 
-    # 生成 SQL
-    yield ThinkingEvent(content="正在生成 SQL 查询...").to_dict()
+    try:
+        # 用于收集最终结果
+        final_result = {
+            "content": "",
+            "sql": None,
+            "result": None,
+            "error": None,
+        }
 
-    # 调用智能体生成 SQL
-    result = await process_query(
-        datasource_id=datasource_id,
-        db_type=db_type, host=host, port=port,
-        database=database, username=username, password=password,
-        schema_name=schema_name,
-        query=query,
-        context=context,
-        history=history,
-    )
+        # 流式调用，传入 config 确保每次调用是独立的
+        for chunk in agent.stream({"messages": messages}, config=config):
+            # 调试：打印 chunk 结构
+            print(f"[DEBUG] chunk type: {type(chunk)}")
+            print(f"[DEBUG] chunk: {chunk}")
 
-    # 发送 SQL 生成事件
-    if result.get("sql"):
-        yield SQLGenerationEvent(sql=result["sql"]).to_dict()
+            # 解析 chunk
+            event = _parse_agent_chunk(chunk)
 
-        # 执行 SQL
-        yield SQLExecutionEvent(status="running").to_dict()
+            if event:
+                # 收集消息内容
+                if isinstance(event, MessageEvent) and event.content:
+                    final_result["content"] = event.content
 
-        start_time = time.time()
-        query_result = await db_service.execute_query(
-            db_type=db_type, host=host, port=port,
-            database=database, username=username, password=password,
-            sql=result["sql"],
-        )
-        duration = time.time() - start_time
+                # 特殊处理 SQL 相关事件
+                if isinstance(event, ToolCallEvent) and event.tool == "run_sql":
+                    sql = event.input.get("sql", "") if event.input else ""
+                    if sql:
+                        final_result["sql"] = sql
+                        yield SQLGenerationEvent(sql=sql).to_dict()
+                        yield SQLExecutionEvent(status="running").to_dict()
 
-        if query_result["success"]:
-            yield SQLExecutionEvent(status="completed", duration=duration).to_dict()
+                if isinstance(event, ToolResultEvent) and event.tool == "run_sql":
+                    yield SQLExecutionEvent(status="completed").to_dict()
 
-            # 生成可视化建议
-            viz_suggestion = _analyze_visualization_intent(
-                query, query_result["columns"], query_result["rows"]
-            )
+                    # 尝试解析结果并生成可视化
+                    try:
+                        result_data = json.loads(event.output) if event.output else {}
+                        if result_data.get("success"):
+                            final_result["result"] = {
+                                "columns": result_data.get("columns", []),
+                                "rows": result_data.get("rows", []),
+                                "total": result_data.get("total", 0),
+                                "truncated": result_data.get("truncated", False),
+                            }
+                            yield ResultEvent(
+                                columns=result_data.get("columns", []),
+                                rows=result_data.get("rows", []),
+                                total=result_data.get("total", 0),
+                                truncated=result_data.get("truncated", False)
+                            ).to_dict()
 
-            if viz_suggestion:
-                yield VisualizationEvent(suggestion=viz_suggestion).to_dict()
+                            # 生成可视化建议
+                            viz = _generate_visualization_suggestion(
+                                result_data.get("columns", []),
+                                result_data.get("rows", []),
+                                query
+                            )
+                            if viz:
+                                yield VisualizationEvent(suggestion=viz).to_dict()
+                    except:
+                        pass
 
-            # 发送结果
-            yield ResultEvent(
-                columns=query_result["columns"],
-                rows=query_result["rows"],
-                total=query_result["total"],
-                truncated=query_result["truncated"]
-            ).to_dict()
+                yield event.to_dict()
 
-            # 更新 result
-            result["result"] = {
-                "columns": query_result["columns"],
-                "rows": query_result["rows"],
-                "total": query_result["total"],
-                "truncated": query_result["truncated"],
-            }
+        # 发送完成事件，包含最终结果
+        yield {"type": "done", "message": "处理完成", "data": final_result}
+
+    except Exception as e:
+        yield ErrorEvent(message=f"处理出错: {str(e)}").to_dict()
+        yield DoneEvent(message="处理结束").to_dict()
+
+
+def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
+    """解析 Agent 输出的 chunk，转换为 SSE 事件"""
+
+    # DeepAgents 的 chunk 是嵌套结构，需要遍历查找 messages
+    for key, value in chunk.items():
+        if isinstance(value, dict) and "messages" in value:
+            messages = value["messages"]
+
+            # 处理 LangGraph 的 Overwrite 对象
+            if hasattr(messages, "value"):
+                messages = messages.value
+            elif not isinstance(messages, (list, tuple)):
+                # 尝试转换为列表
+                try:
+                    messages = list(messages) if messages else []
+                except:
+                    messages = []
+
+            if messages:
+                last_msg = messages[-1]
+
+                # 处理 LangChain 消息对象
+                if hasattr(last_msg, "content"):
+                    content = last_msg.content
+
+                    # 检查是否有工具调用
+                    tool_calls = getattr(last_msg, "tool_calls", None)
+                    if tool_calls:
+                        # 有工具调用，返回工具调用事件
+                        tc = tool_calls[-1]
+                        if isinstance(tc, dict):
+                            return ToolCallEvent(
+                                tool=tc.get("name", "unknown"),
+                                input=tc.get("args", {}),
+                                id=tc.get("id", str(uuid.uuid4()))
+                            )
+                        else:
+                            return ToolCallEvent(
+                                tool=getattr(tc, "name", "unknown"),
+                                input=getattr(tc, "args", {}) or {},
+                                id=getattr(tc, "id", str(uuid.uuid4()))
+                            )
+
+                    # 检查是否是工具结果消息
+                    msg_type = getattr(last_msg, "type", None)
+                    msg_name = getattr(last_msg, "name", None)
+                    if msg_type == "tool" and msg_name:
+                        return ToolResultEvent(
+                            tool=msg_name,
+                            id=str(uuid.uuid4()),
+                            output=str(content)[:500] if content else ""
+                        )
+
+                    # 普通 AI 消息，有内容才返回
+                    if content and isinstance(content, str) and content.strip():
+                        return MessageEvent(content=content)
+
+                # 处理字典格式的消息
+                elif isinstance(last_msg, dict):
+                    msg_content = last_msg.get("content", "")
+                    tool_calls = last_msg.get("tool_calls", [])
+                    msg_type = last_msg.get("type", "")
+                    msg_name = last_msg.get("name", "")
+
+                    if tool_calls:
+                        tc = tool_calls[-1]
+                        return ToolCallEvent(
+                            tool=tc.get("name", msg_name or "unknown"),
+                            input=tc.get("args", {}),
+                            id=tc.get("id", str(uuid.uuid4()))
+                        )
+
+                    if msg_type == "tool":
+                        return ToolResultEvent(
+                            tool=msg_name,
+                            id=str(uuid.uuid4()),
+                            output=str(msg_content)[:500] if msg_content else ""
+                        )
+
+                    if msg_content and isinstance(msg_content, str) and msg_content.strip():
+                        return MessageEvent(content=msg_content)
+
+    # 处理 todos 事件
+    if "todos" in chunk:
+        return PlanEvent(todos=chunk["todos"])
+
+    return None
+
+
+def _generate_visualization_suggestion(
+    columns: List[str],
+    rows: List[List[Any]],
+    question: str,
+) -> Optional[dict]:
+    """生成可视化建议"""
+    if not columns or not rows:
+        return None
+
+    question_lower = question.lower()
+
+    # 检测图表类型意图
+    chart_type = None
+    confidence = 0.5
+
+    if any(word in question_lower for word in ["趋势", "变化", "走势", "增长", "下降"]):
+        chart_type = "line"
+        confidence = 0.85
+    elif any(word in question_lower for word in ["对比", "比较", "各", "每个"]):
+        chart_type = "bar"
+        confidence = 0.85
+    elif any(word in question_lower for word in ["占比", "比例", "百分比"]):
+        chart_type = "pie"
+        confidence = 0.85
+    elif any(word in question_lower for word in ["前", "排名", "最多", "最少", "top"]):
+        chart_type = "bar"
+        confidence = 0.8
+
+    # 基于数据特征推断
+    if chart_type is None:
+        time_keywords = ["date", "time", "日期", "时间", "year", "month", "day"]
+        has_time_col = any(kw in col.lower() for col in columns for kw in time_keywords)
+
+        numeric_cols = []
+        for i, col in enumerate(columns):
+            if rows and isinstance(rows[0][i], (int, float)):
+                numeric_cols.append(col)
+
+        if has_time_col and numeric_cols:
+            chart_type = "line"
+            confidence = 0.75
+        elif len(columns) == 2 and numeric_cols:
+            chart_type = "bar"
+            confidence = 0.7
         else:
-            yield SQLExecutionEvent(status="failed").to_dict()
-            yield ErrorEvent(message=query_result.get("error", "SQL 执行失败")).to_dict()
-            result["error"] = query_result.get("error")
+            return None
 
-    # 发送完成事件
-    yield DoneEvent(message="查询完成").to_dict()
+    return {
+        "chart_type": chart_type,
+        "title": question[:30] + "..." if len(question) > 30 else question,
+        "confidence": confidence,
+        "x_axis": {"field": columns[0], "label": columns[0]},
+        "y_axis": {"field": columns[1] if len(columns) > 1 else columns[0], "label": columns[1] if len(columns) > 1 else columns[0]}
+    }
 
-    # 最终结果作为 data
-    yield {"type": "done", "data": result}
 
+# ==================== 兼容性接口 ====================
 
-async def _generate_sql_for_analysis(query: str, schema_text: str, history: list[dict]) -> dict:
-    """为分析生成 SQL 查询"""
-    llm = _get_llm()
+async def process_query(
+    datasource_id: str,
+    db_type: str,
+    host: str,
+    port: int,
+    database: str,
+    username: str,
+    password: str,
+    schema_name: Optional[str],
+    query: str,
+    context: dict,
+    history: list[dict],
+) -> dict:
+    """非流式处理用户查询（兼容性接口）"""
+    result = None
 
-    system_prompt = f"""你是一个数据分析师助手。用户需要分析数据，请生成一个 SQL 查询来获取相关数据。
+    async for event in process_query_stream(
+        datasource_id, db_type, host, port, database,
+        username, password, schema_name, query, context, history
+    ):
+        if event.get("type") == "message":
+            result = {"content": event.get("content")}
+        elif event.get("type") == "sql_generation":
+            if result is None:
+                result = {}
+            result["sql"] = event.get("sql")
+        elif event.get("type") == "result":
+            if result is None:
+                result = {}
+            result["result"] = {
+                "columns": event.get("columns"),
+                "rows": event.get("rows"),
+                "total": event.get("total"),
+                "truncated": event.get("truncated"),
+            }
 
-{schema_text}
-
-## 规则
-
-- 只生成 SELECT 语句
-- 根据分析问题选择合适的表和字段
-- 如果需要聚合，使用 GROUP BY
-- 如果需要排序，使用 ORDER BY
-- 输出 SQL 语句，用 ```sql 包裹
-
-## 示例
-
-问题：分析最近一年的销售趋势
-SQL：
-```sql
-SELECT DATE_FORMAT(order_date, '%Y-%m') as month, SUM(amount) as total_sales
-FROM orders
-WHERE order_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
-GROUP BY DATE_FORMAT(order_date, '%Y-%m')
-ORDER BY month
-```
-"""
-
-    messages = [("system", system_prompt)]
-    for msg in history[-5:]:
-        messages.append((msg["role"], msg["content"]))
-    messages.append(("user", query))
-
-    response = await llm.ainvoke(messages)
-    sql = _extract_sql(response.content)
-
-    return {"sql": sql}
+    return result or {"content": "处理完成", "error": None}

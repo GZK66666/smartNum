@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import AsyncGenerator, Optional
 
 from app.models import SessionResponse, MessageResponse, MessageHistory, QueryResult
-from app.services import datasource_service, agent_service
+import app.services.datasource_service as datasource_service
+import app.services.agent_service as agent_service
 
 # 内存存储
 _sessions: dict[str, dict] = {}

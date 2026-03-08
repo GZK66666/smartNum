@@ -13,6 +13,8 @@ import {
   Brain,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import DataTable from '@/components/DataTable';
 import ChartViewer from '@/components/ChartViewer';
 import ThinkingProcess from '@/components/ThinkingProcess';
@@ -232,7 +234,11 @@ function MessageBubble({ message }: { message: Message }) {
 
         {/* Content */}
         {message.content && (
-          <p className="text-slate-200 mb-3">{message.content}</p>
+          <div className="prose prose-invert prose-sm max-w-none text-slate-200 mb-3">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {message.content}
+            </ReactMarkdown>
+          </div>
         )}
 
         {/* SQL */}

@@ -168,7 +168,10 @@ export default function DataSourcePage() {
                       to="/chat"
                       state={{ datasourceId: ds.id }}
                       className="btn-ghost flex items-center gap-1 text-sm"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCurrentDataSource(ds);
+                      }}
                     >
                       开始对话
                       <ChevronRight className="w-4 h-4" />
