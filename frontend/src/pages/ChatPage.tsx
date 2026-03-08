@@ -22,6 +22,7 @@ export default function ChatPage() {
     messages,
     isTyping,
     thinkingMessage,
+    thinkingEvents,
     createSession,
     sendMessage,
     clearMessages,
@@ -39,9 +40,10 @@ export default function ChatPage() {
     }
   }, [currentDataSource, currentSession, createSession]);
 
+  // 实时滚动到最新内容（包括思考过程）
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, thinkingEvents]);
 
   const handleSend = async () => {
     if (!input.trim() || isTyping) return;
@@ -129,7 +131,19 @@ export default function ChatPage() {
           ))
         )}
 
-        {isTyping && (
+        {/* 实时展示思考过程 - 类似 Claude Code 的流式展示 */}
+        {isTyping && thinkingEvents.length > 0 && (
+          <div className="message-bubble message-assistant max-w-full">
+            <ThinkingProcess
+              events={thinkingEvents}
+              isStreaming={true}
+              collapsed={false}
+            />
+          </div>
+        )}
+
+        {/* 兼容：如果没有 thinkingEvents 但正在 typing，显示简单的加载状态 */}
+        {isTyping && thinkingEvents.length === 0 && (
           <div className="message-bubble message-assistant">
             <div className="flex items-center gap-2 text-slate-400">
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -193,8 +207,13 @@ function MessageBubble({ message }: { message: Message }) {
   return (
     <div className="flex justify-start space-y-3">
       <div className="message-bubble message-assistant max-w-full">
+        {/* 历史消息的思考过程（已完成） */}
         {message.thinking_process && message.thinking_process.length > 0 && (
-          <ThinkingProcess events={message.thinking_process} />
+          <ThinkingProcess
+            events={message.thinking_process}
+            isStreaming={false}
+            collapsed={true}  // 历史消息默认折叠
+          />
         )}
 
         {message.error && (

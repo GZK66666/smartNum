@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Brain,
   Wrench,
@@ -11,12 +11,14 @@ import {
   Loader2,
   Route,
   Lightbulb,
+  List,
 } from 'lucide-react';
 import type { ThinkingEvent } from '@/types';
 
 interface ThinkingProcessProps {
   events: ThinkingEvent[];
   collapsed?: boolean;
+  isStreaming?: boolean;  // 是否正在流式输出
 }
 
 // 事件图标
@@ -33,6 +35,7 @@ const EventIcon: Record<string, React.ReactNode> = {
   analysis: <Lightbulb className="w-4 h-4 text-purple-400" />,
   error: <AlertCircle className="w-4 h-4 text-red-400" />,
   done: <CheckCircle className="w-4 h-4 text-emerald-400" />,
+  plan: <List className="w-4 h-4 text-indigo-400" />,
 };
 
 // 事件标签
@@ -49,14 +52,26 @@ const EventLabel: Record<string, string> = {
   analysis: '数据分析',
   error: '错误',
   done: '完成',
+  plan: '任务规划',
 };
 
 export default function ThinkingProcess({
   events,
-  collapsed: defaultCollapsed = true,
+  collapsed: defaultCollapsed = false,  // 默认展开，方便实时查看
+  isStreaming = false,
 }: ThinkingProcessProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+
+  // 自动滚动到最新事件
+  useEffect(() => {
+    if (isStreaming && !collapsed) {
+      const container = document.getElementById('thinking-events-container');
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+  }, [events, isStreaming, collapsed]);
 
   // 切换工具详情展开
   const toggleToolExpand = (id: string) => {
@@ -71,10 +86,42 @@ export default function ThinkingProcess({
     });
   };
 
+  // 检查某个工具调用是否已完成（是否有对应的 tool_result）
+  const isToolCompleted = (toolCallId: string, toolName: string, index: number): boolean => {
+    // 对于 run_sql，检查是否有 sql_execution completed 事件
+    if (toolName === 'run_sql') {
+      for (let i = index + 1; i < events.length; i++) {
+        const e = events[i];
+        if (e.type === 'sql_execution' && e.status === 'completed') {
+          return true;
+        }
+      }
+    }
+    // 对于其他工具，检查是否有 tool_result
+    for (let i = index + 1; i < events.length; i++) {
+      const e = events[i];
+      if (e.type === 'tool_result' && e.tool === toolName) {
+        return true;
+      }
+    }
+    // 如果流式已结束，认为已完成
+    return !isStreaming;
+  };
+
   // 渲染单个事件
   const renderEvent = (event: ThinkingEvent, index: number) => {
     const isLast = index === events.length - 1;
     const isToolExpanded = event.id && expandedTools.has(event.id);
+
+    // 对于 tool_call，检查是否已完成
+    let toolCompleted = false;
+    if (event.type === 'tool_call' && event.tool) {
+      toolCompleted = isToolCompleted(event.id || '', event.tool, index);
+    }
+
+    // 对于 sql_execution，检查状态
+    const isSQLRunning = event.type === 'sql_execution' && event.status === 'running';
+    const isSQLCompleted = event.type === 'sql_execution' && event.status === 'completed';
 
     return (
       <div
@@ -87,12 +134,22 @@ export default function ThinkingProcess({
             className={`w-8 h-8 rounded-full flex items-center justify-center ${
               event.type === 'error'
                 ? 'bg-red-400/20'
-                : event.type === 'done'
+                : event.type === 'done' || isSQLCompleted || toolCompleted
                 ? 'bg-emerald-400/20'
+                : isSQLRunning || (event.type === 'tool_call' && !toolCompleted && isStreaming)
+                ? 'bg-yellow-400/20 animate-pulse'
                 : 'bg-slate-700'
             }`}
           >
-            {EventIcon[event.type] || <Brain className="w-4 h-4 text-slate-400" />}
+            {isSQLRunning ? (
+              <Loader2 className="w-4 h-4 text-orange-400 animate-spin" />
+            ) : isSQLCompleted ? (
+              <CheckCircle className="w-4 h-4 text-green-400" />
+            ) : EventIcon[event.type] ? (
+              EventIcon[event.type]
+            ) : (
+              <Brain className="w-4 h-4 text-slate-400" />
+            )}
           </div>
           {!isLast && <div className="w-0.5 h-full bg-slate-700 mt-1" />}
         </div>
@@ -111,6 +168,18 @@ export default function ThinkingProcess({
             {event.confidence && (
               <span className="text-xs text-slate-500">
                 {(event.confidence * 100).toFixed(0)}% 置信度
+              </span>
+            )}
+            {/* 工具调用状态指示 */}
+            {event.type === 'tool_call' && event.tool && (
+              <span className={`text-xs px-2 py-0.5 rounded-full ${
+                toolCompleted
+                  ? 'bg-green-400/20 text-green-300'
+                  : isStreaming
+                  ? 'bg-yellow-400/20 text-yellow-300'
+                  : 'bg-slate-600 text-slate-400'
+              }`}>
+                {toolCompleted ? '已完成' : isStreaming ? '执行中...' : '调用'}
               </span>
             )}
           </div>
@@ -157,34 +226,34 @@ export default function ThinkingProcess({
           )}
 
           {/* SQL */}
-          {(event.type === 'sql_generation' || event.type === 'sql_execution') && event.sql && (
+          {event.type === 'sql_generation' && event.sql && (
             <div className="mt-1 p-2 bg-slate-800/50 rounded overflow-x-auto">
               <pre className="text-xs text-cyan-400">{event.sql}</pre>
             </div>
           )}
 
           {/* SQL 执行状态 */}
-          {event.type === 'sql_execution' && event.status && (
-            <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-              {event.status === 'running' ? (
-                <>
+          {event.type === 'sql_execution' && (
+            <div className="mt-1 flex items-center gap-2 text-xs">
+              {isSQLRunning ? (
+                <span className="flex items-center gap-1 text-orange-400">
                   <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>执行中...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle className="w-3 h-3 text-green-400" />
-                  <span>完成</span>
+                  执行中...
+                </span>
+              ) : isSQLCompleted ? (
+                <span className="flex items-center gap-1 text-green-400">
+                  <CheckCircle className="w-3 h-3" />
+                  执行完成
                   {event.duration && <span>({event.duration.toFixed(2)}s)</span>}
-                </>
-              )}
+                </span>
+              ) : null}
             </div>
           )}
 
           {/* 错误 */}
-          {event.type === 'error' && event.error && (
+          {event.type === 'error' && (event.message || event.error) && (
             <div className="mt-1 p-2 bg-red-400/10 border border-red-400/20 rounded text-sm text-red-400">
-              {event.error}
+              {event.message || event.error}
             </div>
           )}
 
@@ -252,6 +321,9 @@ export default function ThinkingProcess({
           )}
           <Brain className="w-4 h-4" />
           <span>智能体思考过程</span>
+          {isStreaming && (
+            <Loader2 className="w-4 h-4 animate-spin text-primary-400" />
+          )}
           {!collapsed && (
             <span className="text-xs text-slate-500">
               ({eventStats.total} 步骤, {eventStats.tools} 次工具调用)
@@ -268,7 +340,10 @@ export default function ThinkingProcess({
 
       {/* 事件列表 */}
       {!collapsed && events.length > 0 && (
-        <div className="mt-2 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
+        <div
+          id="thinking-events-container"
+          className="mt-2 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50 max-h-96 overflow-y-auto"
+        >
           {events.map((event, index) => renderEvent(event, index))}
         </div>
       )}

@@ -533,15 +533,29 @@ async def process_query_stream(
 ) -> AsyncGenerator[dict, None]:
     """流式处理用户查询 - v2.2 简化架构"""
 
+    import logging
+    logger = logging.getLogger("agent_service")
+    step_counter = 0
+
+    def log_step(step_name: str, detail: str = ""):
+        nonlocal step_counter
+        step_counter += 1
+        logger.info(f"[步骤 {step_counter}] {step_name}: {detail}")
+        print(f"[Agent] 步骤 {step_counter}: {step_name} - {detail}")
+
+    log_step("开始处理", f"用户问题: {query[:50]}...")
+
     # 发送思考事件
     yield ThinkingEvent(content="正在分析您的问题...").to_dict()
 
     # 使用 DeepAgent 流式处理
     agent = get_agent()
+    log_step("获取Agent实例", "成功")
 
     # 使用唯一的 thread_id
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
+    log_step("创建会话", f"thread_id: {thread_id[:8]}...")
 
     # 构建消息
     messages = []
@@ -566,6 +580,7 @@ async def process_query_stream(
 
     # 添加当前问题
     messages.append({"role": "user", "content": query})
+    log_step("构建消息", f"历史消息数: {len(messages) - 2}")
 
     try:
         # 最终结果
@@ -580,6 +595,25 @@ async def process_query_stream(
             event = _parse_agent_chunk(chunk)
 
             if event:
+                # 日志打印
+                event_type = type(event).__name__
+                if isinstance(event, ToolCallEvent):
+                    log_step("工具调用", f"{event.tool}")
+                    if event.input:
+                        # 打印关键参数
+                        input_preview = {k: str(v)[:100] for k, v in event.input.items()}
+                        logger.info(f"  参数: {input_preview}")
+                elif isinstance(event, ToolResultEvent):
+                    log_step("工具结果", f"{event.tool} - {len(event.output or '')} 字符")
+                elif isinstance(event, MessageEvent):
+                    log_step("生成回复", f"{len(event.content or '')} 字符")
+                elif isinstance(event, SQLGenerationEvent):
+                    log_step("SQL生成", event.sql[:50] if event.sql else "")
+                elif isinstance(event, SQLExecutionEvent):
+                    log_step("SQL执行", f"状态: {event.status}")
+                else:
+                    logger.info(f"[Agent] 事件: {event_type}")
+
                 # 收集消息内容
                 if isinstance(event, MessageEvent) and event.content:
                     final_result["content"] = event.content
@@ -598,10 +632,13 @@ async def process_query_stream(
 
                 yield event.to_dict()
 
+        log_step("处理完成", f"总步骤数: {step_counter}")
         # 发送完成事件
         yield {"type": "done", "message": "处理完成", "data": final_result}
 
     except Exception as e:
+        log_step("处理出错", str(e))
+        logger.exception("Agent处理异常")
         yield ErrorEvent(message=f"处理出错: {str(e)}").to_dict()
         yield DoneEvent(message="处理结束").to_dict()
 
