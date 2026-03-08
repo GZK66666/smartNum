@@ -82,6 +82,11 @@ async def send_message_stream(session_id: str, data: MessageCreate):
         return StreamingResponse(
             session_service.send_message_stream(session_id, data.content),
             media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+            },
         )
     except ValueError as e:
         raise HTTPException(

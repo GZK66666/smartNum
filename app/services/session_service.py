@@ -144,6 +144,8 @@ async def send_message_stream(session_id: str, content: str) -> AsyncGenerator[s
 
     # 流式处理
     result = None
+    event_count = 0
+
     async for event in agent_service.process_query_stream(
         datasource_id=datasource_id,
         db_type=ds["type"].value,
@@ -157,13 +159,25 @@ async def send_message_stream(session_id: str, content: str) -> AsyncGenerator[s
         context=session["context"],
         history=session["messages"][:-1],
     ):
+        event_count += 1
+        event_type = event.get("type", "message")
+
         # 记录最终结果
-        if event.get("type") == "done":
+        if event_type == "done":
             result = event.get("data")
 
-        # 发送 SSE 事件 (使用 JSON 序列化)
-        yield f"event: {event.get('type', 'message')}\n"
-        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        # 发送 SSE 事件
+        event_json = json.dumps(event, ensure_ascii=False)
+        sse_message = f"event: {event_type}\ndata: {event_json}\n\n"
+
+        print(f"[SSE] 发送事件 #{event_count}: {event_type}")
+        yield sse_message
+
+        # 强制让出控制权，确保事件立即发送
+        import asyncio
+        await asyncio.sleep(0)
+
+    print(f"[SSE] 流结束，共发送 {event_count} 个事件")
 
     # 添加助手消息
     if result:

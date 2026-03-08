@@ -57,11 +57,17 @@ const EventLabel: Record<string, string> = {
 
 export default function ThinkingProcess({
   events,
-  collapsed: defaultCollapsed = false,  // 默认展开，方便实时查看
+  collapsed: collapsedProp = false,
   isStreaming = false,
 }: ThinkingProcessProps) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  // 当 isStreaming 变化时，重置 collapsed 状态
+  const [collapsed, setCollapsed] = useState(collapsedProp);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+
+  // 当 isStreaming 变化或 collapsedProp 变化时，更新 collapsed 状态
+  useEffect(() => {
+    setCollapsed(collapsedProp);
+  }, [collapsedProp]);
 
   // 自动滚动到最新事件
   useEffect(() => {
@@ -120,8 +126,10 @@ export default function ThinkingProcess({
     }
 
     // 对于 sql_execution，检查状态
-    const isSQLRunning = event.type === 'sql_execution' && event.status === 'running';
-    const isSQLCompleted = event.type === 'sql_execution' && event.status === 'completed';
+    // 如果流式已结束且状态是 running，也显示为完成
+    const eventStatus = event.status;
+    const isSQLRunning = event.type === 'sql_execution' && eventStatus === 'running' && isStreaming;
+    const isSQLCompleted = event.type === 'sql_execution' && (eventStatus === 'completed' || (!isStreaming && eventStatus === 'running'));
 
     return (
       <div

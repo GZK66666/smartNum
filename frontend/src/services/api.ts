@@ -11,6 +11,8 @@ import type {
 } from '@/types';
 
 const API_BASE = '/api';
+// SSE 流式请求直接访问后端，绕过 Vite 代理缓冲
+const SSE_API_BASE = 'http://localhost:8000/api';
 
 class ApiService {
   private client: AxiosInstance;
@@ -111,7 +113,10 @@ class ApiService {
       onError?: (error: string) => void;
     }
   ): Promise<Message> {
-    const url = `${API_BASE}/sessions/${sessionId}/messages/stream`;
+    // 使用直接后端地址，绕过 Vite 代理的缓冲
+    const url = `${SSE_API_BASE}/sessions/${sessionId}/messages/stream`;
+
+    console.log('[SSE] 开始流式请求');
 
     const response = await fetch(url, {
       method: 'POST',
@@ -140,15 +145,22 @@ class ApiService {
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+
+      if (done) {
+        console.log('[SSE] 流结束');
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
+      console.log('[SSE] 收到数据块:', buffer.length, '字节');
+
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
       for (const line of lines) {
         if (line.startsWith('event:')) {
           currentEventType = line.slice(6).trim();
+          console.log('[SSE] 事件类型:', currentEventType);
           continue;
         }
 
@@ -160,6 +172,9 @@ class ApiService {
             const data = JSON.parse(dataStr);
             const event = { type: currentEventType, ...data } as ThinkingEvent;
             events.push(event);
+
+            // 立即触发回调，让 UI 实时更新
+            console.log('[SSE] 触发事件回调:', currentEventType);
             callbacks.onEvent?.(event);
 
             switch (currentEventType) {
@@ -178,7 +193,6 @@ class ApiService {
 
               case 'message':
                 if (data.content) {
-                  // v2.2: 只处理文本内容
                   blocks.push({ type: 'text', content: data.content });
                 }
                 break;
@@ -188,12 +202,14 @@ class ApiService {
                 callbacks.onError?.(error);
                 break;
             }
-          } catch {
-            // 忽略解析错误
+          } catch (e) {
+            console.error('[SSE] 解析错误:', e);
           }
         }
       }
     }
+
+    console.log('[SSE] 总事件数:', events.length);
 
     const finalMessage: Message = {
       id: `msg-${Date.now()}`,
