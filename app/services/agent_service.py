@@ -1,16 +1,16 @@
-"""DeepAgents 统一智能体服务 - v2.1 架构
+"""DeepAgents 统一智能体服务 - v2.2 简化架构
 
 核心设计原则：
-- 智能体完全自主决策输出方式
-- 提供"输出工具"让智能体显式控制展示
-- 前端只做渲染，不预设展示逻辑
+- 智能体专注于回答用户问题
+- 提供细粒度的 Schema 查询工具，实现渐进式上下文加载
+- 去除展示控制工具，让智能体自由输出
 """
 
 import json
 import re
 import uuid
 from datetime import datetime
-from typing import Any, AsyncGenerator, Optional, List, Literal
+from typing import Any, AsyncGenerator, Optional, List
 from dataclasses import dataclass, asdict
 import asyncio
 
@@ -83,20 +83,6 @@ class SQLExecutionEvent(SSEEvent):
 
 
 @dataclass
-class ContentBlockEvent(SSEEvent):
-    """内容块事件 - 智能体决定展示的内容"""
-    type: str = "content_block"
-    block_type: str = None  # "table" | "chart"
-    # table 类型
-    columns: Optional[List[str]] = None
-    rows: Optional[List[List[Any]]] = None
-    # chart 类型
-    option: Optional[dict] = None
-    # 通用
-    title: Optional[str] = None
-
-
-@dataclass
 class MessageEvent(SSEEvent):
     """消息事件"""
     type: str = "message"
@@ -122,131 +108,315 @@ class DoneEvent(SSEEvent):
 
 SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询和分析数据库中的数据。
 
-## 工作流程
+## 工作流程（渐进式上下文加载）
 
-1. **理解需求**：分析用户的问题，确定需要查询什么数据
-2. **获取结构**：使用 get_schema 了解数据库表结构
-3. **执行查询**：使用 run_sql 执行 SQL 查询获取数据
-4. **展示结果**：使用 present_table 或 present_chart 向用户展示数据
-5. **简要解读**：用简洁的文字解读关键发现
+**重要**：不要一次性加载所有表结构，按需逐步查询，避免上下文溢出。
 
-## 工具使用指南
+1. **列出表名**：先用 `list_tables` 查看有哪些表可用（返回信息精简）
+2. **按需查结构**：根据用户问题，只调用 `get_table_schema` 查询相关表的结构
+3. **执行查询**：使用 `run_sql` 执行 SQL 获取数据
+4. **回答问题**：用自然语言回答，数据结果用 Markdown 表格展示
 
-### get_schema - 获取数据库结构
-在查询数据前，先调用此工具了解有哪些表和字段。
+## 错误处理与迭代修复
 
-### run_sql - 执行 SQL 查询
-根据用户需求编写 SQL 查询语句。只支持 SELECT 语句。
+**当工具调用失败时，不要直接返回错误，要分析原因并重试：**
 
-### present_table - 展示表格数据 ⭐ 重要
-**当查询返回数据时，必须调用此工具展示表格**，而不是用文本描述数据。
+1. **SQL 执行失败**：
+   - 分析错误信息（如语法错误、表不存在、列不存在等）
+   - 检查表名/列名是否正确，可能需要重新调用 `get_table_schema` 确认结构
+   - 修正 SQL 后重新执行
+   - 最多重试 3 次
 
-参数：
-- columns: 列名列表
-- rows: 数据行列表
-- title: 表格标题（可选）
+2. **Schema 查询失败**：
+   - 检查表名是否正确，可用 `list_tables` 确认
+   - 表名大小写敏感问题需注意
 
-### present_chart - 展示图表
-当数据适合可视化展示时（如趋势对比、占比分布等），调用此工具生成图表。
+3. **结果为空**：
+   - 检查查询条件是否过于严格
+   - 考虑放宽条件或检查数据是否存在
 
-参数：
-- option: ECharts 图表配置
-- title: 图表标题（可选）
+**示例错误处理流程**：
+```
+用户: 查询用户表的前10条
+→ list_tables() → 发现有 users 表
+→ get_table_schema("users") → 获取列信息
+→ run_sql("SELECT * FROM user LIMIT 10") → 报错: Table 'user' doesn't exist
+→ 分析错误: 表名应该是 'users' 不是 'user'
+→ run_sql("SELECT * FROM users LIMIT 10") → 成功
+→ 返回结果
+```
+
+## 工具说明
+
+### list_tables
+列出数据库所有表名和注释。返回精简信息，不包含列详情。
+**在查询数据前必须先调用此工具了解有哪些表。**
+
+### get_table_schema
+获取指定表的详细结构（列名、类型、注释）。
+**只在确定相关表后才调用，避免加载无关表结构。**
+
+### run_sql
+执行 SQL SELECT 查询并返回结果。只支持 SELECT 语句。
+**返回结果包含 success 字段，失败时会返回 error 信息。**
 
 ## 输出规则
 
-1. **禁止在文本中重复展示数据**
-   - 已经通过 present_table 展示的数据，不要再在文本中用 Markdown 表格重复列出
-   - 已经通过 present_chart 展示的图表，不要再在文本中描述图表内容
+1. 数据结果用 Markdown 表格展示
+2. 用简洁的自然语言解读关键发现
+3. 直接回答用户的问题
 
-2. **文本内容应该简洁**
-   - 说明查询了什么数据
-   - 解读关键发现和洞察
-   - 回答用户的具体问题
+## 安全规则
 
-3. **数据展示优先使用工具**
-   - 有数据结果 → 使用 present_table 展示
-   - 适合可视化 → 使用 present_chart 展示
-   - 不要用文本形式输出表格数据
-
-## 示例
-
-用户：查询各部门用户数量
-
-正确做法：
-1. 调用 get_schema 了解表结构
-2. 调用 run_sql 执行查询
-3. 调用 present_table 展示查询结果表格
-4. 简要文字说明："已为您查询各部门用户数量，如上表所示。用户主要集中在顶级部门，占比超过95%。"
-
-错误做法：
-- 用 Markdown 表格在文本中列出数据（应使用 present_table）
-- 在展示表格后又用文字重复描述每个数据项
+- 只生成 SELECT 语句，禁止 DELETE/UPDATE/INSERT
+- 不查询敏感数据（如密码、身份证号）
 """
 
 
 # ==================== 核心工具定义 ====================
 
-def get_schema(
-    datasource_id: str,
-    table_pattern: Optional[str] = None,
-) -> str:
+def list_tables(datasource_id: str) -> str:
     """
-    获取数据库表结构。
+    列出数据库中所有表的名称和注释。
+
+    在查询数据前，先调用此工具了解有哪些表可用。
+    返回简洁的表列表，不包含列信息。
 
     Args:
         datasource_id: 数据源ID
-        table_pattern: 表名过滤模式（可选，支持 % 通配符）
 
     Returns:
-        数据库表结构信息（Markdown 格式）
+        表名和注释列表（Markdown 格式）
     """
 
-    async def _get_schema():
-        from app.services import datasource_service
-        schema_info = await datasource_service.get_schema(datasource_id)
-        if schema_info is None:
-            return "错误: 数据源不存在或无法获取 Schema"
+    async def _list_tables():
+        from app.services import datasource_service, db_service
 
-        lines = ["# 数据库 Schema\n"]
-        import fnmatch
+        ds = await datasource_service.get_datasource(datasource_id)
+        if ds is None:
+            return "错误: 数据源不存在"
 
-        for table in schema_info.tables:
-            table_name = table.name
+        # 获取简化的表信息（只包含表名和注释）
+        url = db_service.get_database_url(
+            ds["type"].value,
+            ds["host"],
+            ds["port"],
+            ds["database"],
+            ds["username"],
+            ds["password"],
+        )
 
-            if table_pattern:
-                if not fnmatch.fnmatch(table_name.lower(), table_pattern.lower()):
-                    continue
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
 
-            table_comment = table.comment or ""
-            lines.append(f"\n## 表: {table_name}")
-            if table_comment:
-                lines.append(f"说明: {table_comment}")
+        engine = create_async_engine(url, echo=False)
 
-            lines.append("\n| 列名 | 类型 | 可空 | 键 | 说明 |")
-            lines.append("|------|------|------|-----|------|")
+        try:
+            async with engine.connect() as conn:
+                lines = ["# 数据库表列表\n"]
+                lines.append("| 序号 | 表名 | 说明 |")
+                lines.append("|------|------|------|")
 
-            for col in table.columns:
-                nullable = "是" if col.nullable else "否"
-                key = col.key or "-"
-                comment = col.comment or "-"
-                lines.append(f"| {col.name} | {col.type} | {nullable} | {key} | {comment} |")
+                if ds["type"].value == "mysql":
+                    result = await conn.execute(
+                        text("""
+                            SELECT TABLE_NAME, TABLE_COMMENT
+                            FROM information_schema.TABLES
+                            WHERE TABLE_SCHEMA = :db
+                            ORDER BY TABLE_NAME
+                        """),
+                        {"db": ds["database"]},
+                    )
+                    rows = result.fetchall()
 
-        return "\n".join(lines)
+                    for i, row in enumerate(rows, 1):
+                        table_name = row[0]
+                        table_comment = row[1] or "-"
+                        lines.append(f"| {i} | {table_name} | {table_comment} |")
 
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+                elif ds["type"].value == "postgresql":
+                    schema = ds.get("schema_name") or "public"
+                    result = await conn.execute(
+                        text("""
+                            SELECT table_name, obj_description((table_schema || '.' || table_name)::regclass) as table_comment
+                            FROM information_schema.tables
+                            WHERE table_schema = :schema AND table_type = 'BASE TABLE'
+                            ORDER BY table_name
+                        """),
+                        {"schema": schema},
+                    )
+                    rows = result.fetchall()
 
-    if loop.is_running():
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, _get_schema())
-            return future.result()
-    else:
-        return loop.run_until_complete(_get_schema())
+                    for i, row in enumerate(rows, 1):
+                        table_name = row[0]
+                        table_comment = row[1] or "-"
+                        lines.append(f"| {i} | {table_name} | {table_comment} |")
+
+                elif ds["type"].value == "sqlite":
+                    result = await conn.execute(
+                        text("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                    )
+                    rows = result.fetchall()
+
+                    for i, row in enumerate(rows, 1):
+                        table_name = row[0]
+                        lines.append(f"| {i} | {table_name} | - |")
+
+                return "\n".join(lines)
+
+        finally:
+            await engine.dispose()
+
+    return _run_async(_list_tables)
+
+
+def get_table_schema(
+    datasource_id: str,
+    table_name: str,
+) -> str:
+    """
+    获取指定表的详细结构信息。
+
+    当你需要了解某个表的列名、类型、注释等信息时调用此工具。
+    建议只查询与用户问题相关的表，避免加载过多信息。
+
+    Args:
+        datasource_id: 数据源ID
+        table_name: 表名
+
+    Returns:
+        表结构信息（Markdown 格式），包含列名、类型、注释等
+    """
+
+    async def _get_table_schema():
+        from app.services import datasource_service, db_service
+
+        ds = await datasource_service.get_datasource(datasource_id)
+        if ds is None:
+            return "错误: 数据源不存在"
+
+        url = db_service.get_database_url(
+            ds["type"].value,
+            ds["host"],
+            ds["port"],
+            ds["database"],
+            ds["username"],
+            ds["password"],
+        )
+
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        engine = create_async_engine(url, echo=False)
+
+        try:
+            async with engine.connect() as conn:
+                lines = [f"# 表结构: {table_name}\n"]
+
+                if ds["type"].value == "mysql":
+                    # 获取表注释
+                    table_result = await conn.execute(
+                        text("""
+                            SELECT TABLE_COMMENT
+                            FROM information_schema.TABLES
+                            WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :table
+                        """),
+                        {"db": ds["database"], "table": table_name},
+                    )
+                    table_row = table_result.fetchone()
+                    if table_row and table_row[0]:
+                        lines.append(f"**表说明**: {table_row[0]}\n")
+
+                    # 获取列信息
+                    columns_result = await conn.execute(
+                        text("""
+                            SELECT
+                                COLUMN_NAME,
+                                COLUMN_TYPE,
+                                IS_NULLABLE,
+                                COLUMN_KEY,
+                                COLUMN_DEFAULT,
+                                COLUMN_COMMENT
+                            FROM information_schema.COLUMNS
+                            WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :table
+                            ORDER BY ORDINAL_POSITION
+                        """),
+                        {"db": ds["database"], "table": table_name},
+                    )
+                    column_rows = columns_result.fetchall()
+
+                    lines.append("\n| 列名 | 类型 | 可空 | 键 | 默认值 | 说明 |")
+                    lines.append("|------|------|------|-----|--------|------|")
+
+                    for col in column_rows:
+                        col_name = col[0]
+                        col_type = col[1]
+                        nullable = "是" if col[2] == "YES" else "否"
+                        col_key = col[3] or "-"
+                        col_default = col[4] or "-"
+                        col_comment = col[5] or "-"
+                        lines.append(f"| {col_name} | {col_type} | {nullable} | {col_key} | {col_default} | {col_comment} |")
+
+                elif ds["type"].value == "postgresql":
+                    schema = ds.get("schema_name") or "public"
+
+                    # 获取列信息
+                    columns_result = await conn.execute(
+                        text("""
+                            SELECT
+                                column_name,
+                                data_type || COALESCE('(' || character_maximum_length || ')', ''),
+                                is_nullable,
+                                NULL as column_key,
+                                column_default,
+                                col_description((table_schema || '.' || table_name)::regclass, ordinal_position)
+                            FROM information_schema.columns
+                            WHERE table_schema = :schema AND table_name = :table
+                            ORDER BY ordinal_position
+                        """),
+                        {"schema": schema, "table": table_name},
+                    )
+                    column_rows = columns_result.fetchall()
+
+                    lines.append("\n| 列名 | 类型 | 可空 | 键 | 默认值 | 说明 |")
+                    lines.append("|------|------|------|-----|--------|------|")
+
+                    for col in column_rows:
+                        col_name = col[0]
+                        col_type = col[1]
+                        nullable = "是" if col[2] == "YES" else "否"
+                        col_key = col[3] or "-"
+                        col_default = col[4] or "-"
+                        col_comment = col[5] or "-"
+                        lines.append(f"| {col_name} | {col_type} | {nullable} | {col_key} | {col_default} | {col_comment} |")
+
+                elif ds["type"].value == "sqlite":
+                    # 获取表结构
+                    pragma_result = await conn.execute(
+                        text(f"PRAGMA table_info({table_name})")
+                    )
+                    column_rows = pragma_result.fetchall()
+
+                    lines.append("\n| 列名 | 类型 | 可空 | 主键 | 默认值 |")
+                    lines.append("|------|------|------|------|--------|")
+
+                    for col in column_rows:
+                        col_name = col[1]
+                        col_type = col[2] or "-"
+                        nullable = "否" if col[3] == 1 else "是"
+                        is_pk = "是" if col[5] == 1 else "否"
+                        col_default = col[4] or "-"
+                        lines.append(f"| {col_name} | {col_type} | {nullable} | {is_pk} | {col_default} |")
+
+                return "\n".join(lines)
+
+        except Exception as e:
+            return f"错误: 获取表结构失败 - {str(e)}"
+
+        finally:
+            await engine.dispose()
+
+    return _run_async(_get_table_schema)
 
 
 def run_sql(
@@ -263,11 +433,12 @@ def run_sql(
         limit: 最大返回行数
 
     Returns:
-        查询结果，包含 columns（列名列表）、rows（数据行）、total（总数）、truncated（是否截断）
+        查询结果，包含 success、columns、rows、total、truncated、error
     """
 
     async def _execute():
         from app.services import datasource_service, db_service
+
         ds = await datasource_service.get_datasource(datasource_id)
         if ds is None:
             return {"success": False, "error": "数据源不存在"}
@@ -284,96 +455,31 @@ def run_sql(
         )
         return result
 
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    return _run_async(_execute)
 
-    if loop.is_running():
+
+def _run_async(coro_func):
+    """辅助函数：在同步上下文中运行异步函数
+
+    Args:
+        coro_func: 一个无参数的异步函数，返回协程
+    """
+    try:
+        # 尝试获取当前运行中的事件循环
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        # 已有运行中的事件循环，需要在新线程中运行
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, _execute())
+            future = executor.submit(asyncio.run, coro_func())
             return future.result()
     else:
-        return loop.run_until_complete(_execute())
-
-
-def present_table(
-    columns: List[str],
-    rows: List[List[Any]],
-    title: Optional[str] = None,
-) -> str:
-    """
-    向用户展示表格数据。
-
-    当你需要以表格形式向用户展示数据时调用此工具。
-
-    Args:
-        columns: 列名列表，如 ["产品名", "销售额", "数量"]
-        rows: 数据行列表，每行是一个值列表，如 [["产品A", 1000, 50], ["产品B", 2000, 30]]
-        title: 表格标题（可选）
-
-    Returns:
-        确认信息
-    """
-    # 实际处理在 process_query_stream 中
-    return f"已展示表格（{len(rows)} 行）"
-
-
-def present_chart(
-    option: dict,
-    title: Optional[str] = None,
-) -> str:
-    """
-    向用户展示图表。
-
-    当你需要以图表形式向用户展示数据时调用此工具。
-    你需要自己生成 ECharts 的 option 配置。
-
-    Args:
-        option: ECharts 图表配置，必须包含 series 字段
-        title: 图表标题（可选）
-
-    Returns:
-        成功返回确认信息，失败返回错误提示
-
-    ECharts option 示例:
-    {
-        "xAxis": {"type": "category", "data": ["A", "B", "C"]},
-        "yAxis": {"type": "value"},
-        "series": [{"type": "bar", "data": [100, 200, 150]}]
-    }
-    """
-    import json
-
-    # 校验 option 是否为有效字典
-    if not isinstance(option, dict):
-        return "错误：option 必须是一个有效的 JSON 对象"
-
-    # 校验 option 是否可以序列化为 JSON
-    try:
-        json.dumps(option)
-    except (TypeError, ValueError) as e:
-        return f"错误：option 包含无法序列化的数据: {str(e)}"
-
-    # 校验必要字段
-    if "series" not in option:
-        return "错误：option 必须包含 series 字段"
-
-    if not isinstance(option["series"], list) or len(option["series"]) == 0:
-        return "错误：series 必须是非空数组"
-
-    # 校验每个 series 是否有 type 和 data
-    for i, s in enumerate(option["series"]):
-        if not isinstance(s, dict):
-            return f"错误：series[{i}] 必须是对象"
-        if "type" not in s:
-            return f"错误：series[{i}] 缺少 type 字段"
-        if "data" not in s:
-            return f"错误：series[{i}] 缺少 data 字段"
-
-    return "图表配置有效，已展示给用户"
+        # 没有运行中的事件循环，直接运行
+        return asyncio.run(coro_func())
 
 
 # ==================== DeepAgent 创建 ====================
@@ -390,7 +496,7 @@ def get_agent():
     from deepagents import create_deep_agent
     from langchain_openai import ChatOpenAI
 
-    # 创建 OpenAI 兼容的 LLM（支持阿里百炼等）
+    # 创建 OpenAI 兼容的 LLM
     llm = ChatOpenAI(
         model=settings.llm_model_name,
         api_key=settings.llm_api_key,
@@ -399,11 +505,11 @@ def get_agent():
         max_tokens=settings.llm_max_tokens,
     )
 
-    # 创建智能体 - 使用新的工具集
+    # 创建智能体 - 使用简化的工具集
     _agent = create_deep_agent(
         name="smartnum-agent",
         model=llm,
-        tools=[get_schema, run_sql, present_table, present_chart],
+        tools=[list_tables, get_table_schema, run_sql],
         system_prompt=SYSTEM_PROMPT,
     )
 
@@ -411,21 +517,6 @@ def get_agent():
 
 
 # ==================== SSE 流式处理 ====================
-
-def _remove_markdown_tables(text: str) -> str:
-    """移除文本中的 Markdown 表格，避免与 present_table 重复展示"""
-    # 匹配 markdown 表格的正则表达式
-    # 表格格式：| 列1 | 列2 | ...\n|---|---|...\n| 数据1 | 数据2 | ...
-    table_pattern = r'\|[^\n]+\|\s*\n\|[-:\s|]+\|\s*\n(?:\|[^\n]+\|\s*\n?)+'
-
-    # 移除表格
-    cleaned = re.sub(table_pattern, '', text)
-
-    # 清理多余的空行（超过2个连续空行变为2个）
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-
-    return cleaned.strip()
-
 
 async def process_query_stream(
     datasource_id: str,
@@ -440,7 +531,7 @@ async def process_query_stream(
     context: dict,
     history: list[dict],
 ) -> AsyncGenerator[dict, None]:
-    """流式处理用户查询 - v2.1 智能体自主输出架构"""
+    """流式处理用户查询 - v2.2 简化架构"""
 
     # 发送思考事件
     yield ThinkingEvent(content="正在分析您的问题...").to_dict()
@@ -448,28 +539,26 @@ async def process_query_stream(
     # 使用 DeepAgent 流式处理
     agent = get_agent()
 
-    # 使用唯一的 thread_id 确保每次调用独立
+    # 使用唯一的 thread_id
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    # 构建消息 - 包含历史对话以保持上下文
+    # 构建消息
     messages = []
     for msg in history[-10:]:
         role = msg.get("role", "user")
-        # 从 blocks 中提取文字内容
         blocks = msg.get("blocks", [])
         text_content = ""
         for block in blocks:
             if block.get("type") == "text":
                 text_content = block.get("content", "")
                 break
-        # 兼容旧格式
         if not text_content:
             text_content = msg.get("content", "")
         if text_content:
             messages.append({"role": role, "content": text_content})
 
-    # 添加数据源上下文（作为系统提示的一部分，不是用户问题）
+    # 添加数据源上下文
     messages.append({
         "role": "system",
         "content": f"当前数据源ID: {datasource_id}。调用工具时使用此ID。",
@@ -479,40 +568,21 @@ async def process_query_stream(
     messages.append({"role": "user", "content": query})
 
     try:
-        # 用于收集最终结果
+        # 最终结果
         final_result = {
             "content": "",
             "sql": None,
-            "blocks": [],  # 新增：内容块列表
             "error": None,
         }
-
-        # 当前 SQL 查询的结果缓存
-        current_sql_result = None
 
         # 流式调用
         for chunk in agent.stream({"messages": messages}, config=config):
             event = _parse_agent_chunk(chunk)
 
             if event:
-                # [DEBUG] 打印事件类型和内容
-                print(f"\n[DEBUG] Event type: {type(event).__name__}")
-                if isinstance(event, MessageEvent):
-                    print(f"[DEBUG] MessageEvent content repr: {repr(event.content)}")
-                    print(f"[DEBUG] MessageEvent content length: {len(event.content) if event.content else 0}")
-
-                # 收集消息内容（避免重复添加）
+                # 收集消息内容
                 if isinstance(event, MessageEvent) and event.content:
                     final_result["content"] = event.content
-                    # 只有当最后一个 block 不是 text 时才添加
-                    if not final_result["blocks"] or final_result["blocks"][-1].get("type") != "text":
-                        final_result["blocks"].append({
-                            "type": "text",
-                            "content": event.content
-                        })
-                    else:
-                        # 更新最后一个 text block 的内容
-                        final_result["blocks"][-1]["content"] = event.content
 
                 # 处理 SQL 相关事件
                 if isinstance(event, ToolCallEvent) and event.tool == "run_sql":
@@ -522,80 +592,13 @@ async def process_query_stream(
                         yield SQLGenerationEvent(sql=sql).to_dict()
                         yield SQLExecutionEvent(status="running").to_dict()
 
-                # 缓存 run_sql 结果
+                # 处理 run_sql 结果
                 if isinstance(event, ToolResultEvent) and event.tool == "run_sql":
                     yield SQLExecutionEvent(status="completed").to_dict()
-                    try:
-                        result_data = json.loads(event.output) if event.output else {}
-                        if result_data.get("success"):
-                            current_sql_result = {
-                                "columns": result_data.get("columns", []),
-                                "rows": result_data.get("rows", []),
-                                "total": result_data.get("total", 0),
-                                "truncated": result_data.get("truncated", False),
-                            }
-                    except:
-                        pass
-
-                # 处理 present_table 工具调用 - 智能体决定展示表格
-                if isinstance(event, ToolCallEvent) and event.tool == "present_table":
-                    columns = event.input.get("columns", []) if event.input else []
-                    rows = event.input.get("rows", []) if event.input else []
-                    title = event.input.get("title", "") if event.input else ""
-
-                    block = {
-                        "type": "table",
-                        "data": {
-                            "columns": columns,
-                            "rows": rows,
-                            "total": len(rows),
-                            "truncated": False,
-                        },
-                        "title": title,
-                    }
-                    final_result["blocks"].append(block)
-                    yield ContentBlockEvent(
-                        block_type="table",
-                        columns=columns,
-                        rows=rows,
-                        title=title,
-                    ).to_dict()
-
-                # 处理 present_chart 工具调用 - 智能体决定展示图表
-                if isinstance(event, ToolCallEvent) and event.tool == "present_chart":
-                    option = event.input.get("option", {}) if event.input else {}
-                    title = event.input.get("title", "") if event.input else ""
-
-                    block = {
-                        "type": "chart",
-                        "option": option,
-                        "title": title,
-                    }
-                    final_result["blocks"].append(block)
-                    yield ContentBlockEvent(
-                        block_type="chart",
-                        option=option,
-                        title=title,
-                    ).to_dict()
 
                 yield event.to_dict()
 
-        # 清理最终结果：如果存在 table/chart block，移除 text block 中的 markdown 表格
-        has_visual_blocks = any(
-            b.get("type") in ("table", "chart")
-            for b in final_result["blocks"]
-        )
-        if has_visual_blocks:
-            for block in final_result["blocks"]:
-                if block.get("type") == "text":
-                    original = block.get("content", "")
-                    cleaned = _remove_markdown_tables(original)
-                    if cleaned != original:
-                        print(f"[DEBUG] Removed markdown table from text block")
-                        print(f"[DEBUG] Original length: {len(original)}, Cleaned length: {len(cleaned)}")
-                    block["content"] = cleaned
-
-        # 发送完成事件，包含最终结果
+        # 发送完成事件
         yield {"type": "done", "message": "处理完成", "data": final_result}
 
     except Exception as e:
@@ -606,10 +609,7 @@ async def process_query_stream(
 def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
     """解析 Agent 输出的 chunk，转换为 SSE 事件"""
 
-    # [DEBUG] 打印原始 chunk 结构
-    print(f"\n[DEBUG] _parse_agent_chunk received keys: {list(chunk.keys())}")
-
-    # DeepAgents 的 chunk 是嵌套结构，需要遍历查找 messages
+    # DeepAgents 的 chunk 是嵌套结构
     for key, value in chunk.items():
         if isinstance(value, dict) and "messages" in value:
             messages = value["messages"]
@@ -657,18 +657,12 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
                             output=str(content)[:500] if content else ""
                         )
 
-                    # 只处理 AI 消息，过滤掉 human/user 消息
-                    # LangChain 消息类型: "human", "ai", "tool", "system"
+                    # 过滤掉 human/user 消息
                     if msg_type == "human":
-                        # 这是用户消息，不应该作为 AI 回复返回
                         return None
 
-                    # 普通 AI 消息，有内容才返回
+                    # 普通 AI 消息
                     if content and isinstance(content, str) and content.strip():
-                        # [DEBUG] 打印 AI 消息内容
-                        print(f"[DEBUG] AI message type: {msg_type}")
-                        print(f"[DEBUG] AI message content repr: {repr(content[:200])}...")
-                        print(f"[DEBUG] Newlines in content: {content.count(chr(10))}")
                         return MessageEvent(content=content)
 
                 # 处理字典格式的消息
@@ -693,15 +687,10 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
                             output=str(msg_content)[:500] if msg_content else ""
                         )
 
-                    # 只处理 AI 消息，过滤掉 human/user 消息
                     if msg_type == "human":
                         return None
 
                     if msg_content and isinstance(msg_content, str) and msg_content.strip():
-                        # [DEBUG] 打印字典格式 AI 消息内容
-                        print(f"[DEBUG] Dict AI message type: {msg_type}")
-                        print(f"[DEBUG] Dict AI message content repr: {repr(msg_content[:200])}...")
-                        print(f"[DEBUG] Newlines in dict content: {msg_content.count(chr(10))}")
                         return MessageEvent(content=msg_content)
 
     # 处理 todos 事件
@@ -739,17 +728,5 @@ async def process_query(
             if result is None:
                 result = {}
             result["sql"] = event.get("sql")
-        elif event.get("type") == "content_block":
-            if result is None:
-                result = {}
-            if "blocks" not in result:
-                result["blocks"] = []
-            result["blocks"].append({
-                "type": event.get("block_type"),
-                "data": event.get("data"),
-                "chart_type": event.get("chart_type"),
-                "option": event.get("option"),
-                "title": event.get("title"),
-            })
 
     return result or {"content": "处理完成", "error": None}

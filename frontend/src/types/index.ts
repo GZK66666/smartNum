@@ -50,19 +50,16 @@ export interface QueryResult {
   truncated: boolean;
 }
 
-// ==================== v2.1 内容块类型 ====================
+// ==================== v2.2 简化内容块类型 ====================
 
-// 内容块类型 - 智能体决定返回什么
-export type ContentBlock =
-  | { type: 'text'; content: string }
-  | { type: 'table'; columns: string[]; rows: (string | number | null)[][]; title?: string }
-  | { type: 'chart'; option: Record<string, unknown>; title?: string };
+// 内容块类型 - 只保留文本类型
+export type ContentBlock = { type: 'text'; content: string };
 
 // 消息类型 - 使用内容块
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
-  blocks: ContentBlock[];  // 智能体决定返回哪些块
+  blocks: ContentBlock[];
   sql?: string;  // 保留用于调试
   thinking_process?: ThinkingEvent[];
   created_at: string;
@@ -139,14 +136,13 @@ export interface ChartSuggestion {
   confidence: number;
 }
 
-// 思考过程事件类型 (v2.1)
+// 思考过程事件类型 (v2.2)
 export type ThinkingEventType =
   | 'thinking'
   | 'tool_call'
   | 'tool_result'
   | 'sql_generation'
   | 'sql_execution'
-  | 'content_block'
   | 'message'
   | 'error'
   | 'done';
@@ -161,12 +157,6 @@ export interface ThinkingEvent {
   id?: string;
   sql?: string;
   status?: string;
-  // content_block 事件字段
-  block_type?: string;
-  columns?: string[];
-  rows?: (string | number | null)[][];
-  option?: Record<string, unknown>;
-  title?: string;
   message?: string;
   error?: string;
 }

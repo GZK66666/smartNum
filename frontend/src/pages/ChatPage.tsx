@@ -8,16 +8,11 @@ import {
   Check,
   Database,
   Code,
-  Table,
-  BarChart2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import DataTable from '@/components/DataTable';
-import ChartViewer from '@/components/ChartViewer';
 import ThinkingProcess from '@/components/ThinkingProcess';
-import ExportButton from '@/components/ExportButton';
 import type { Message, ContentBlock } from '@/types';
 
 export default function ChatPage() {
@@ -239,54 +234,16 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-// 内容块渲染器
+// 内容块渲染器 - v2.2 简化版
 function ContentBlockRenderer({ block }: { block: ContentBlock }) {
-  switch (block.type) {
-    case 'text':
-      return (
-        <div className="prose prose-invert prose-sm max-w-none text-slate-200 mb-3">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {block.content}
-          </ReactMarkdown>
-        </div>
-      );
-
-    case 'table':
-      const tableData = {
-        columns: block.columns,
-        rows: block.rows,
-        total: block.rows.length,
-        truncated: false,
-      };
-      return (
-        <div className="mt-3">
-          {block.title && (
-            <div className="flex items-center gap-2 mb-2 text-sm text-slate-400">
-              <Table className="w-4 h-4" />
-              <span>{block.title}</span>
-            </div>
-          )}
-          <DataTable result={tableData} />
-          <div className="mt-2">
-            <ExportButton data={tableData} filename={`export_${Date.now()}`} />
-          </div>
-        </div>
-      );
-
-    case 'chart':
-      return (
-        <div className="mt-3">
-          {block.title && (
-            <div className="flex items-center gap-2 mb-2 text-sm text-slate-400">
-              <BarChart2 className="w-4 h-4" />
-              <span>{block.title}</span>
-            </div>
-          )}
-          <ChartViewer option={block.option} title={block.title} />
-        </div>
-      );
-
-    default:
-      return null;
+  if (block.type === 'text') {
+    return (
+      <div className="prose prose-invert prose-sm max-w-none text-slate-200 mb-3">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {block.content}
+        </ReactMarkdown>
+      </div>
+    );
   }
+  return null;
 }

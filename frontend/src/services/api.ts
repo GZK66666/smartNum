@@ -100,7 +100,7 @@ class ApiService {
     return response.data.data!;
   }
 
-  /** 发送消息 (流式 SSE) - v2.1 智能体自主输出 */
+  /** 发送消息 (流式 SSE) - v2.2 简化版 */
   async sendMessageStream(
     sessionId: string,
     content: string,
@@ -178,24 +178,8 @@ class ApiService {
 
               case 'message':
                 if (data.content) {
+                  // v2.2: 只处理文本内容
                   blocks.push({ type: 'text', content: data.content });
-                }
-                break;
-
-              case 'content_block':
-                if (data.block_type === 'table') {
-                  blocks.push({
-                    type: 'table',
-                    columns: data.columns || [],
-                    rows: data.rows || [],
-                    title: data.title,
-                  });
-                } else if (data.block_type === 'chart') {
-                  blocks.push({
-                    type: 'chart',
-                    option: data.option || {},
-                    title: data.title,
-                  });
                 }
                 break;
 
