@@ -50,19 +50,23 @@ export interface QueryResult {
   truncated: boolean;
 }
 
+// ==================== v2.1 内容块类型 ====================
+
+// 内容块类型 - 智能体决定返回什么
+export type ContentBlock =
+  | { type: 'text'; content: string }
+  | { type: 'table'; columns: string[]; rows: (string | number | null)[][]; title?: string }
+  | { type: 'chart'; option: Record<string, unknown>; title?: string };
+
+// 消息类型 - 使用内容块
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
-  content: string;
-  sql?: string;
-  result?: QueryResult;
-  error?: string;
-  created_at: string;
-  // v1.1 新增字段
+  blocks: ContentBlock[];  // 智能体决定返回哪些块
+  sql?: string;  // 保留用于调试
   thinking_process?: ThinkingEvent[];
-  visualization?: ChartSuggestion;
-  analysis?: AnalysisResult;
-  agent_type?: 'text2sql' | 'chitchat' | 'analysis';
+  created_at: string;
+  error?: string;
 }
 
 // API 响应类型
@@ -95,7 +99,7 @@ export interface SSEEvent {
   };
 }
 
-// ==================== v1.1 新增类型 ====================
+// ==================== v1.1 兼容类型 ====================
 
 // 图表类型
 export type ChartType = 'line' | 'bar' | 'pie' | 'scatter' | 'histogram' | 'area';
@@ -135,18 +139,15 @@ export interface ChartSuggestion {
   confidence: number;
 }
 
-// 思考过程事件类型 (v1.1)
+// 思考过程事件类型 (v2.1)
 export type ThinkingEventType =
-  | 'route'
   | 'thinking'
   | 'tool_call'
   | 'tool_result'
   | 'sql_generation'
   | 'sql_execution'
-  | 'visualization'
-  | 'result'
+  | 'content_block'
   | 'message'
-  | 'analysis'
   | 'error'
   | 'done';
 
@@ -160,16 +161,12 @@ export interface ThinkingEvent {
   id?: string;
   sql?: string;
   status?: string;
-  duration?: number;
-  suggestion?: ChartSuggestion;
-  agent?: 'text2sql' | 'chitchat' | 'analysis';
-  confidence?: number;
-  insights?: Insight[];
-  recommendations?: string[];
+  // content_block 事件字段
+  block_type?: string;
   columns?: string[];
   rows?: (string | number | null)[][];
-  total?: number;
-  truncated?: boolean;
+  option?: Record<string, unknown>;
+  title?: string;
   message?: string;
   error?: string;
 }

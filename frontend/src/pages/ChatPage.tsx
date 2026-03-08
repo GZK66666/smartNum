@@ -10,7 +10,6 @@ import {
   Code,
   Table,
   BarChart2,
-  Brain,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
@@ -19,7 +18,7 @@ import DataTable from '@/components/DataTable';
 import ChartViewer from '@/components/ChartViewer';
 import ThinkingProcess from '@/components/ThinkingProcess';
 import ExportButton from '@/components/ExportButton';
-import type { Message } from '@/types';
+import type { Message, ContentBlock } from '@/types';
 
 export default function ChatPage() {
   const {
@@ -37,7 +36,6 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Initialize session when datasource is selected
   useEffect(() => {
     if (currentDataSource && !currentSession) {
       createSession(currentDataSource.id).catch(() => {
@@ -46,7 +44,6 @@ export default function ChatPage() {
     }
   }, [currentDataSource, currentSession, createSession]);
 
-  // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -137,7 +134,6 @@ export default function ChatPage() {
           ))
         )}
 
-        {/* Typing Indicator */}
         {isTyping && (
           <div className="message-bubble message-assistant">
             <div className="flex items-center gap-2 text-slate-400">
@@ -176,11 +172,10 @@ export default function ChatPage() {
   );
 }
 
-// Message Bubble Component
+// Message Bubble - 渲染智能体返回的内容块
 function MessageBubble({ message }: { message: Message }) {
   const [copied, setCopied] = useState(false);
   const [showSql, setShowSql] = useState(false);
-  const [activeTab, setActiveTab] = useState<'table' | 'chart'>('table');
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -190,71 +185,38 @@ function MessageBubble({ message }: { message: Message }) {
   };
 
   if (message.role === 'user') {
+    const content = message.blocks?.find(b => b.type === 'text')?.content || '';
     return (
       <div className="flex justify-end">
         <div className="message-bubble message-user">
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          <p className="whitespace-pre-wrap">{content}</p>
         </div>
       </div>
     );
   }
 
-  // 判断是否显示图表
-  const showChart = message.visualization && message.result && message.result.rows.length > 0;
-
   return (
     <div className="flex justify-start space-y-3">
       <div className="message-bubble message-assistant max-w-full">
-        {/* Agent Type Badge */}
-        {message.agent_type && message.agent_type !== 'text2sql' && (
-          <div className="mb-2">
-            <span className={`text-xs px-2 py-0.5 rounded-full ${
-              message.agent_type === 'chitchat'
-                ? 'bg-blue-400/20 text-blue-300'
-                : message.agent_type === 'analysis'
-                ? 'bg-purple-400/20 text-purple-300'
-                : 'bg-slate-600 text-slate-300'
-            }`}>
-              {message.agent_type === 'chitchat' ? '闲聊' : message.agent_type === 'analysis' ? '数据分析' : message.agent_type}
-            </span>
-          </div>
-        )}
-
-        {/* Thinking Process */}
         {message.thinking_process && message.thinking_process.length > 0 && (
           <ThinkingProcess events={message.thinking_process} />
         )}
 
-        {/* Error */}
         {message.error && (
-          <div className="text-red-400 mb-2">
-            ⚠️ {message.error}
-          </div>
+          <div className="text-red-400 mb-2">⚠️ {message.error}</div>
         )}
 
-        {/* Content */}
-        {message.content && (
-          <div className="prose prose-invert prose-sm max-w-none text-slate-200 mb-3">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {message.content}
-            </ReactMarkdown>
-          </div>
-        )}
-
-        {/* SQL */}
         {message.sql && (
           <div className="mb-3">
-            <div className="flex items-center justify-between mb-2">
-              <button
-                onClick={() => setShowSql(!showSql)}
-                className="flex items-center gap-2 text-sm text-slate-400 hover:text-slate-300"
-              >
-                <Code className="w-4 h-4" />
-                {showSql ? '隐藏 SQL' : '显示 SQL'}
-              </button>
-            </div>
+            <button
+              onClick={() => setShowSql(!showSql)}
+              className="flex items-center gap-2 text-sm text-slate-400 hover:text-slate-300"
+            >
+              <Code className="w-4 h-4" />
+              {showSql ? '隐藏 SQL' : '显示 SQL'}
+            </button>
             {showSql && (
-              <div className="relative">
+              <div className="relative mt-2">
                 <pre className="sql-block text-xs overflow-x-auto">
                   <code>{message.sql}</code>
                 </pre>
@@ -262,115 +224,69 @@ function MessageBubble({ message }: { message: Message }) {
                   onClick={() => copyToClipboard(message.sql!)}
                   className="absolute top-2 right-2 p-1.5 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
                 >
-                  {copied ? (
-                    <Check className="w-3 h-3 text-green-400" />
-                  ) : (
-                    <Copy className="w-3 h-3 text-slate-400" />
-                  )}
+                  {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3 text-slate-400" />}
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* Analysis Result */}
-        {message.analysis && (
-          <div className="mb-3 p-3 bg-purple-400/10 border border-purple-400/20 rounded-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <Brain className="w-4 h-4 text-purple-400" />
-              <span className="text-sm font-medium text-purple-300">数据分析</span>
-            </div>
-            <div className="space-y-2">
-              {message.analysis.insights.map((insight, i) => (
-                <div
-                  key={i}
-                  className={`p-2 rounded border-l-2 ${
-                    insight.importance === 'high'
-                      ? 'border-red-400 bg-red-400/10'
-                      : insight.importance === 'medium'
-                      ? 'border-yellow-400 bg-yellow-400/10'
-                      : 'border-slate-400 bg-slate-700/50'
-                  }`}
-                >
-                  <div className="text-sm font-medium text-slate-300">{insight.title}</div>
-                  <div className="text-xs text-slate-400 mt-1">{insight.content}</div>
-                </div>
-              ))}
-              {message.analysis.recommendations.length > 0 && (
-                <div className="mt-2">
-                  <div className="text-xs text-slate-500 mb-1">建议:</div>
-                  <ul className="text-xs text-slate-400 space-y-1">
-                    {message.analysis.recommendations.map((rec, i) => (
-                      <li key={i} className="flex items-start gap-1">
-                        <span className="text-primary-400">•</span>
-                        {rec}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Result Table/Chart */}
-        {message.result && message.result.rows.length > 0 && (
-          <div className="mt-3">
-            {/* Tabs and Export */}
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setActiveTab('table')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                    activeTab === 'table'
-                      ? 'bg-primary-500/20 text-primary-400'
-                      : 'text-slate-400 hover:text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  <Table className="w-4 h-4" />
-                  表格
-                </button>
-                {showChart && (
-                  <button
-                    onClick={() => setActiveTab('chart')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                      activeTab === 'chart'
-                        ? 'bg-primary-500/20 text-primary-400'
-                        : 'text-slate-400 hover:text-slate-300 hover:bg-slate-700'
-                    }`}
-                  >
-                    <BarChart2 className="w-4 h-4" />
-                    图表
-                  </button>
-                )}
-              </div>
-              <ExportButton
-                data={message.result}
-                filename={`query_${message.id}`}
-              />
-            </div>
-
-            {/* Stats */}
-            <div className="flex items-center gap-2 mb-2 text-sm text-slate-400">
-              <Table className="w-4 h-4" />
-              <span>
-                查询结果 · {message.result.total} 条记录
-                {message.result.truncated && ' (已截断)'}
-              </span>
-            </div>
-
-            {/* Content */}
-            {activeTab === 'table' ? (
-              <DataTable result={message.result} />
-            ) : showChart ? (
-              <ChartViewer
-                data={message.result}
-                suggestion={message.visualization!}
-              />
-            ) : null}
-          </div>
-        )}
+        {message.blocks?.map((block, index) => (
+          <ContentBlockRenderer key={index} block={block} />
+        ))}
       </div>
     </div>
   );
+}
+
+// 内容块渲染器
+function ContentBlockRenderer({ block }: { block: ContentBlock }) {
+  switch (block.type) {
+    case 'text':
+      return (
+        <div className="prose prose-invert prose-sm max-w-none text-slate-200 mb-3">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {block.content}
+          </ReactMarkdown>
+        </div>
+      );
+
+    case 'table':
+      const tableData = {
+        columns: block.columns,
+        rows: block.rows,
+        total: block.rows.length,
+        truncated: false,
+      };
+      return (
+        <div className="mt-3">
+          {block.title && (
+            <div className="flex items-center gap-2 mb-2 text-sm text-slate-400">
+              <Table className="w-4 h-4" />
+              <span>{block.title}</span>
+            </div>
+          )}
+          <DataTable result={tableData} />
+          <div className="mt-2">
+            <ExportButton data={tableData} filename={`export_${Date.now()}`} />
+          </div>
+        </div>
+      );
+
+    case 'chart':
+      return (
+        <div className="mt-3">
+          {block.title && (
+            <div className="flex items-center gap-2 mb-2 text-sm text-slate-400">
+              <BarChart2 className="w-4 h-4" />
+              <span>{block.title}</span>
+            </div>
+          )}
+          <ChartViewer option={block.option} title={block.title} />
+        </div>
+      );
+
+    default:
+      return null;
+  }
 }

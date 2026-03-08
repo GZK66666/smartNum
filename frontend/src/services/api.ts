@@ -7,6 +7,7 @@ import type {
   Message,
   ApiResponse,
   ThinkingEvent,
+  ContentBlock,
 } from '@/types';
 
 const API_BASE = '/api';
@@ -22,15 +23,12 @@ class ApiService {
       },
     });
 
-    // Response interceptor for error handling
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
         if (error.response) {
-          // Server responded with error
           return Promise.reject(error.response.data);
         } else if (error.request) {
-          // No response received
           return Promise.reject({
             code: -1,
             message: '无法连接到服务器，请检查网络连接',
@@ -43,13 +41,11 @@ class ApiService {
 
   // ==================== 数据源管理 ====================
 
-  /** 获取数据源列表 */
   async getDataSources(): Promise<DataSource[]> {
     const response = await this.client.get<ApiResponse<DataSource[]>>('/datasources');
     return response.data.data || [];
   }
 
-  /** 添加数据源 */
   async addDataSource(config: DataSourceConfig): Promise<DataSource> {
     const response = await this.client.post<ApiResponse<DataSource>>('/datasources', config);
     if (response.data.code !== 0) {
@@ -58,7 +54,6 @@ class ApiService {
     return response.data.data!;
   }
 
-  /** 测试数据源连接 */
   async testDataSource(config: DataSourceConfig): Promise<{ success: boolean; message: string; version?: string }> {
     const response = await this.client.post<ApiResponse<{ success: boolean; message: string; version?: string }>>(
       '/datasources/test',
@@ -67,12 +62,10 @@ class ApiService {
     return response.data.data!;
   }
 
-  /** 删除数据源 */
   async deleteDataSource(id: string): Promise<void> {
     await this.client.delete(`/datasources/${id}`);
   }
 
-  /** 获取数据源 Schema */
   async getDataSourceSchema(id: string): Promise<SchemaInfo> {
     const response = await this.client.get<ApiResponse<SchemaInfo>>(`/datasources/${id}/schema`);
     return response.data.data!;
@@ -80,7 +73,6 @@ class ApiService {
 
   // ==================== 会话管理 ====================
 
-  /** 创建会话 */
   async createSession(datasourceId: string): Promise<Session> {
     const response = await this.client.post<ApiResponse<Session>>('/sessions', {
       datasource_id: datasourceId,
@@ -88,12 +80,10 @@ class ApiService {
     return response.data.data!;
   }
 
-  /** 删除会话 */
   async deleteSession(sessionId: string): Promise<void> {
     await this.client.delete(`/sessions/${sessionId}`);
   }
 
-  /** 获取会话历史消息 */
   async getSessionMessages(sessionId: string, limit = 20): Promise<Message[]> {
     const response = await this.client.get<ApiResponse<{ messages: Message[] }>>(
       `/sessions/${sessionId}/messages`,
@@ -102,7 +92,6 @@ class ApiService {
     return response.data.data?.messages || [];
   }
 
-  /** 发送消息 (非流式) */
   async sendMessage(sessionId: string, content: string): Promise<Message> {
     const response = await this.client.post<ApiResponse<Message>>(
       `/sessions/${sessionId}/messages`,
@@ -111,7 +100,7 @@ class ApiService {
     return response.data.data!;
   }
 
-  /** 发送消息 (流式 SSE) - 返回完整消息 */
+  /** 发送消息 (流式 SSE) - v2.1 智能体自主输出 */
   async sendMessageStream(
     sessionId: string,
     content: string,
@@ -145,15 +134,8 @@ class ApiService {
     let buffer = '';
     let currentEventType = '';
     const events: ThinkingEvent[] = [];
-    let finalMessage: Message | null = null;
-
-    // 用于构建最终消息
-    let messageContent = '';
+    const blocks: ContentBlock[] = [];
     let sql = '';
-    let result: Message['result'] = undefined;
-    let visualization: Message['visualization'] = undefined;
-    let analysis: Message['analysis'] = undefined;
-    let agentType: Message['agent_type'] = 'text2sql';
     let error = '';
 
     while (true) {
@@ -165,13 +147,11 @@ class ApiService {
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        // 解析事件类型
         if (line.startsWith('event:')) {
           currentEventType = line.slice(6).trim();
           continue;
         }
 
-        // 解析事件数据
         if (line.startsWith('data:')) {
           const dataStr = line.slice(5).trim();
           if (!dataStr) continue;
@@ -179,20 +159,10 @@ class ApiService {
           try {
             const data = JSON.parse(dataStr);
             const event = { type: currentEventType, ...data } as ThinkingEvent;
-
-            // 添加到事件列表
             events.push(event);
-
-            // 调用回调
             callbacks.onEvent?.(event);
 
-            // 根据事件类型处理
             switch (currentEventType) {
-              case 'route':
-                agentType = data.agent || 'text2sql';
-                callbacks.onThinking?.(`路由到 ${agentType} 智能体...`);
-                break;
-
               case 'thinking':
                 callbacks.onThinking?.(data.content || '思考中...');
                 break;
@@ -206,67 +176,32 @@ class ApiService {
                 callbacks.onThinking?.('已生成 SQL');
                 break;
 
-              case 'visualization':
-                visualization = data.suggestion;
-                break;
-
-              case 'result':
-                result = {
-                  columns: data.columns || [],
-                  rows: data.rows || [],
-                  total: data.total || 0,
-                  truncated: data.truncated || false,
-                };
-                break;
-
               case 'message':
-                messageContent = data.content || '';
+                if (data.content) {
+                  blocks.push({ type: 'text', content: data.content });
+                }
                 break;
 
-              case 'analysis':
-                analysis = {
-                  insights: data.insights || [],
-                  recommendations: data.recommendations || [],
-                  data_used: [],
-                };
+              case 'content_block':
+                if (data.block_type === 'table') {
+                  blocks.push({
+                    type: 'table',
+                    columns: data.columns || [],
+                    rows: data.rows || [],
+                    title: data.title,
+                  });
+                } else if (data.block_type === 'chart') {
+                  blocks.push({
+                    type: 'chart',
+                    option: data.option || {},
+                    title: data.title,
+                  });
+                }
                 break;
 
               case 'error':
                 error = data.message || '处理失败';
                 callbacks.onError?.(error);
-                break;
-
-              case 'done':
-                // 最后的 done 事件可能包含完整的 message 数据
-                if (data.data) {
-                  finalMessage = {
-                    id: `msg-${Date.now()}`,
-                    role: 'assistant',
-                    content: data.data.content || messageContent,
-                    sql: data.data.sql || sql,
-                    result: data.data.result || result,
-                    error: data.data.error || error || undefined,
-                    thinking_process: events,
-                    visualization: data.data.visualization || visualization,
-                    analysis: data.data.analysis || analysis,
-                    agent_type: data.data.agent_type || agentType,
-                    created_at: new Date().toISOString(),
-                  };
-                } else {
-                  finalMessage = {
-                    id: `msg-${Date.now()}`,
-                    role: 'assistant',
-                    content: messageContent,
-                    sql: sql || undefined,
-                    result: result,
-                    error: error || undefined,
-                    thinking_process: events,
-                    visualization: visualization,
-                    analysis: analysis,
-                    agent_type: agentType,
-                    created_at: new Date().toISOString(),
-                  };
-                }
                 break;
             }
           } catch {
@@ -276,22 +211,15 @@ class ApiService {
       }
     }
 
-    // 如果没有收到 done 事件，手动构建消息
-    if (!finalMessage) {
-      finalMessage = {
-        id: `msg-${Date.now()}`,
-        role: 'assistant',
-        content: messageContent,
-        sql: sql || undefined,
-        result: result,
-        error: error || undefined,
-        thinking_process: events,
-        visualization: visualization,
-        analysis: analysis,
-        agent_type: agentType,
-        created_at: new Date().toISOString(),
-      };
-    }
+    const finalMessage: Message = {
+      id: `msg-${Date.now()}`,
+      role: 'assistant',
+      blocks,
+      sql: sql || undefined,
+      thinking_process: events,
+      created_at: new Date().toISOString(),
+      error: error || undefined,
+    };
 
     callbacks.onDone?.(finalMessage);
     return finalMessage;

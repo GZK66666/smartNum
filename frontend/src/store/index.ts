@@ -130,11 +130,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { currentSession, messages } = get();
     if (!currentSession) return;
 
-    // 添加用户消息
+    // 添加用户消息（使用 blocks 格式）
     const userMessage: Message = {
       id: `temp-${Date.now()}`,
       role: 'user',
-      content,
+      blocks: [{ type: 'text', content }],
       created_at: new Date().toISOString(),
     };
 
@@ -179,7 +179,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           {
             id: `error-${Date.now()}`,
             role: 'assistant' as const,
-            content: '',
+            blocks: [],
             error: errorMessage,
             created_at: new Date().toISOString(),
           },
