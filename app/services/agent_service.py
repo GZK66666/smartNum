@@ -7,6 +7,7 @@
 """
 
 import json
+import re
 import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Optional, List, Literal
@@ -119,18 +120,68 @@ class DoneEvent(SSEEvent):
 
 # ==================== 系统提示词 ====================
 
-SYSTEM_PROMPT = """你是 SmartNum 数据分析助手。
+SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询和分析数据库中的数据。
 
-## 目标
-帮助用户查询和分析数据库中的数据。
+## 工作流程
 
-## 可用工具
-- get_schema: 获取数据库表结构
-- run_sql: 执行 SQL 查询
-- present_table: 向用户展示表格数据
-- present_chart: 向用户展示图表
+1. **理解需求**：分析用户的问题，确定需要查询什么数据
+2. **获取结构**：使用 get_schema 了解数据库表结构
+3. **执行查询**：使用 run_sql 执行 SQL 查询获取数据
+4. **展示结果**：使用 present_table 或 present_chart 向用户展示数据
+5. **简要解读**：用简洁的文字解读关键发现
 
-根据用户需求自主决定如何回答。
+## 工具使用指南
+
+### get_schema - 获取数据库结构
+在查询数据前，先调用此工具了解有哪些表和字段。
+
+### run_sql - 执行 SQL 查询
+根据用户需求编写 SQL 查询语句。只支持 SELECT 语句。
+
+### present_table - 展示表格数据 ⭐ 重要
+**当查询返回数据时，必须调用此工具展示表格**，而不是用文本描述数据。
+
+参数：
+- columns: 列名列表
+- rows: 数据行列表
+- title: 表格标题（可选）
+
+### present_chart - 展示图表
+当数据适合可视化展示时（如趋势对比、占比分布等），调用此工具生成图表。
+
+参数：
+- option: ECharts 图表配置
+- title: 图表标题（可选）
+
+## 输出规则
+
+1. **禁止在文本中重复展示数据**
+   - 已经通过 present_table 展示的数据，不要再在文本中用 Markdown 表格重复列出
+   - 已经通过 present_chart 展示的图表，不要再在文本中描述图表内容
+
+2. **文本内容应该简洁**
+   - 说明查询了什么数据
+   - 解读关键发现和洞察
+   - 回答用户的具体问题
+
+3. **数据展示优先使用工具**
+   - 有数据结果 → 使用 present_table 展示
+   - 适合可视化 → 使用 present_chart 展示
+   - 不要用文本形式输出表格数据
+
+## 示例
+
+用户：查询各部门用户数量
+
+正确做法：
+1. 调用 get_schema 了解表结构
+2. 调用 run_sql 执行查询
+3. 调用 present_table 展示查询结果表格
+4. 简要文字说明："已为您查询各部门用户数量，如上表所示。用户主要集中在顶级部门，占比超过95%。"
+
+错误做法：
+- 用 Markdown 表格在文本中列出数据（应使用 present_table）
+- 在展示表格后又用文字重复描述每个数据项
 """
 
 
@@ -361,6 +412,21 @@ def get_agent():
 
 # ==================== SSE 流式处理 ====================
 
+def _remove_markdown_tables(text: str) -> str:
+    """移除文本中的 Markdown 表格，避免与 present_table 重复展示"""
+    # 匹配 markdown 表格的正则表达式
+    # 表格格式：| 列1 | 列2 | ...\n|---|---|...\n| 数据1 | 数据2 | ...
+    table_pattern = r'\|[^\n]+\|\s*\n\|[-:\s|]+\|\s*\n(?:\|[^\n]+\|\s*\n?)+'
+
+    # 移除表格
+    cleaned = re.sub(table_pattern, '', text)
+
+    # 清理多余的空行（超过2个连续空行变为2个）
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+
+    return cleaned.strip()
+
+
 async def process_query_stream(
     datasource_id: str,
     db_type: str,
@@ -513,6 +579,21 @@ async def process_query_stream(
                     ).to_dict()
 
                 yield event.to_dict()
+
+        # 清理最终结果：如果存在 table/chart block，移除 text block 中的 markdown 表格
+        has_visual_blocks = any(
+            b.get("type") in ("table", "chart")
+            for b in final_result["blocks"]
+        )
+        if has_visual_blocks:
+            for block in final_result["blocks"]:
+                if block.get("type") == "text":
+                    original = block.get("content", "")
+                    cleaned = _remove_markdown_tables(original)
+                    if cleaned != original:
+                        print(f"[DEBUG] Removed markdown table from text block")
+                        print(f"[DEBUG] Original length: {len(original)}, Cleaned length: {len(cleaned)}")
+                    block["content"] = cleaned
 
         # 发送完成事件，包含最终结果
         yield {"type": "done", "message": "处理完成", "data": final_result}
