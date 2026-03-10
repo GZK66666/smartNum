@@ -214,6 +214,27 @@ class ApiService {
                     console.error('[SSE] 解析图表数据失败:', e);
                   }
                 }
+                // 处理 export_data 工具调用结果
+                if (data.tool === 'export_data' && data.output) {
+                  try {
+                    const exportData = JSON.parse(data.output);
+                    if (exportData.download_id && !exportData.error) {
+                      blocks.push({
+                        type: 'export',
+                        filename: exportData.filename || 'export.csv',
+                        format: exportData.format || 'csv',
+                        size: exportData.size || 0,
+                        downloadId: exportData.download_id,
+                        rowCount: exportData.row_count || 0,
+                        columnCount: exportData.column_count || 0,
+                      });
+                    } else if (exportData.error) {
+                      console.error('[SSE] 导出失败:', exportData.error);
+                    }
+                  } catch (e) {
+                    console.error('[SSE] 解析导出数据失败:', e);
+                  }
+                }
                 break;
 
               case 'error':

@@ -117,6 +117,7 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询
 3. **执行查询**：使用 `run_sql` 执行 SQL 获取数据
 4. **回答问题**：用自然语言回答，数据结果用 Markdown 表格展示
 5. **可视化（可选）**：如果用户要求图表，调用 `render_chart` 生成 ECharts 配置
+6. **导出（可选）**：如果用户要求导出表格，调用 `export_data` 生成可下载文件
 
 ## 错误处理与迭代修复
 
@@ -165,12 +166,17 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询
 当用户要求可视化时调用此工具，生成 ECharts 图表配置。
 **只在用户明确要求图表时使用，参数包含图表类型和数据。**
 
+### export_data
+当用户要求导出表格数据时调用此工具，生成可下载的文件。
+**支持 CSV 和 Excel 格式，参数包含文件名、数据数组和格式。默认使用 CSV 格式。**
+
 ## 输出规则
 
 1. 数据结果用 Markdown 表格展示
 2. 用简洁的自然语言解读关键发现
 3. 直接回答用户的问题
 4. 用户要求图表时，调用 render_chart 工具生成配置
+5. 用户要求导出时，调用 export_data 工具生成文件
 
 ## 安全规则
 
@@ -589,6 +595,142 @@ def render_chart(
     return {"chart_type": chart_type, "title": title, "option": option}
 
 
+def export_data(
+    filename: str,
+    data: list,
+    format: str = "csv",
+) -> dict:
+    """
+    导出数据为文件。
+
+    当用户要求导出表格数据时调用此工具。智能体根据查询结果生成文件，
+    工具会返回文件信息和下载标识，前端可通过 download_id 下载文件。
+
+    Args:
+        filename: 文件名（不含扩展名）
+        data: 数据数组，包含导出的所有数据，每项为一个对象
+        format: 导出格式 - csv 或 xlsx
+
+    Returns:
+        文件信息对象，包含 filename, format, download_id, size 等
+
+    Examples:
+        # 导出 CSV
+        export_data(
+            filename="产品销售数据",
+            data=[
+                {"product": "产品 A", "sales": 1000, "count": 50},
+                {"product": "产品 B", "sales": 800, "count": 30},
+            ],
+            format="csv"
+        )
+
+        # 导出 Excel
+        export_data(
+            filename="月度报表",
+            data=[
+                {"month": "1 月", "revenue": 100000},
+                {"month": "2 月", "revenue": 120000},
+            ],
+            format="xlsx"
+        )
+    """
+    import csv
+    import io
+    import uuid
+    from datetime import datetime
+
+    if not data:
+        return {"error": "没有可导出的数据"}
+
+    # 生成唯一的下载 ID
+    download_id = str(uuid.uuid4())
+
+    # 获取列名
+    columns = list(data[0].keys())
+
+    # 生成文件内容
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=columns, quoting=csv.QUOTE_MINIMAL)
+        writer.writeheader()
+        writer.writerows(data)
+        content = output.getvalue().encode("utf-8-sig")
+        file_extension = "csv"
+        mime_type = "text/csv"
+    elif format == "xlsx":
+        try:
+            import openpyxl
+            from openpyxl import Workbook
+        except ImportError:
+            return {"error": "Excel 导出需要安装 openpyxl 库"}
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "数据"
+
+        # 写入表头
+        for col_idx, col_name in enumerate(columns, 1):
+            ws.cell(row=1, column=col_idx, value=col_name)
+
+        # 写入数据
+        for row_idx, row_data in enumerate(data, 2):
+            for col_idx, col_name in enumerate(columns, 1):
+                value = row_data.get(col_name, "")
+                # 处理特殊值
+                if isinstance(value, datetime):
+                    value = value.strftime("%Y-%m-%d %H:%M:%S")
+                ws.cell(row=row_idx, column=col_idx, value=value)
+
+        # 自动调整列宽
+        for col_idx, col_name in enumerate(columns, 1):
+            max_length = len(str(col_name))
+            for row_data in data:
+                value = row_data.get(col_name, "")
+                if value is not None:
+                    max_length = max(max_length, len(str(value)))
+            col_letter = chr(64 + col_idx) if col_idx <= 26 else f"{chr(64 + col_idx // 26)}{chr(64 + col_idx % 26)}"
+            ws.column_dimensions[col_letter].width = min(max_length + 2, 50)
+
+        # 保存到字节流
+        output = io.BytesIO()
+        wb.save(output)
+        content = output.getvalue()
+        file_extension = "xlsx"
+        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        return {"error": f"不支持的导出格式：{format}"}
+
+    # 计算文件大小（KB）
+    size_kb = round(len(content) / 1024, 2)
+
+    # 存储到临时缓存（使用 asyncio 全局存储）
+    _export_cache[download_id] = {
+        "content": content,
+        "filename": f"{filename}.{file_extension}",
+        "mime_type": mime_type,
+        "created_at": datetime.now(),
+    }
+
+    return {
+        "download_id": download_id,
+        "filename": f"{filename}.{file_extension}",
+        "format": format,
+        "size": size_kb,
+        "row_count": len(data),
+        "column_count": len(columns),
+    }
+
+
+# 导出文件临时缓存（download_id -> file content）
+_export_cache: dict = {}
+
+
+def get_export_file(download_id: str) -> dict | None:
+    """根据 download_id 获取文件内容"""
+    return _export_cache.get(download_id)
+
+
 def _run_async(coro_func):
     """辅助函数：在同步上下文中运行异步函数
 
@@ -640,7 +782,7 @@ def get_agent():
     _agent = create_deep_agent(
         name="smartnum-agent",
         model=llm,
-        tools=[list_tables, get_table_schema, run_sql, render_chart],
+        tools=[list_tables, get_table_schema, run_sql, render_chart, export_data],
         system_prompt=SYSTEM_PROMPT,
     )
 

@@ -14,6 +14,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ThinkingProcess from '@/components/ThinkingProcess';
 import ChartRenderer from '@/components/ChartRenderer';
+import ExportCard from '@/components/ExportCard';
 import type { Message, ContentBlock } from '@/types';
 
 export default function ChatPage() {
@@ -254,7 +255,7 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-// 内容块渲染器 - 支持文本和图表
+// 内容块渲染器 - 支持文本、图表和导出
 function ContentBlockRenderer({ block }: { block: ContentBlock }) {
   if (block.type === 'text') {
     return (
@@ -272,6 +273,19 @@ function ContentBlockRenderer({ block }: { block: ContentBlock }) {
         chartType={block.chartType}
         title={block.title}
         option={block.option}
+      />
+    );
+  }
+
+  if (block.type === 'export') {
+    return (
+      <ExportCard
+        filename={block.filename}
+        format={block.format}
+        size={block.size}
+        downloadId={block.downloadId}
+        rowCount={block.rowCount}
+        columnCount={block.columnCount}
       />
     );
   }

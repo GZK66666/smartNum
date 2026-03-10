@@ -13,6 +13,7 @@ from app.models import (
 )
 from app.services import session_service
 from app.services.export_service import export_data
+from app.services.agent_service import get_export_file
 
 router = APIRouter(prefix="/api/sessions", tags=["会话管理"])
 
@@ -111,6 +112,33 @@ async def get_messages(session_id: str, limit: int = 20):
             },
         )
     return ApiResponse(data=history)
+
+
+@router.get("/export/{download_id}")
+async def download_export_file(download_id: str):
+    """
+    下载导出的文件
+
+    根据 download_id 下载导出的 CSV 或 Excel 文件。
+    """
+    file_info = get_export_file(download_id)
+
+    if file_info is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": ErrorCode.EXPORT_DATA_NOT_FOUND,
+                "message": "文件不存在或已过期",
+            },
+        )
+
+    return Response(
+        content=file_info["content"],
+        media_type=file_info["mime_type"],
+        headers={
+            "Content-Disposition": f'attachment; filename="{file_info["filename"]}"'
+        }
+    )
 
 
 @router.post("/{session_id}/export")
