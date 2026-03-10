@@ -4,12 +4,24 @@
 -- 字符集：utf8mb4
 -- ============================================================
 
+-- 禁用外键检查
+SET FOREIGN_KEY_CHECKS = 0;
+
 -- 创建数据库
 CREATE DATABASE IF NOT EXISTS smartnum
 DEFAULT CHARACTER SET utf8mb4
 DEFAULT COLLATE utf8mb4_unicode_ci;
 
 USE smartnum;
+
+-- 删除现有表（禁用外键检查后）
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS datasources;
+DROP TABLE IF EXISTS users;
+
+-- 恢复外键检查
+SET FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================================
 -- 用户表
