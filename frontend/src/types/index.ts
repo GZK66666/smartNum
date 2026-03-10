@@ -52,8 +52,10 @@ export interface QueryResult {
 
 // ==================== v2.2 简化内容块类型 ====================
 
-// 内容块类型 - 只保留文本类型
-export type ContentBlock = { type: 'text'; content: string };
+// 内容块类型 - 支持文本和图表
+export type ContentBlock =
+  | { type: 'text'; content: string }
+  | { type: 'chart'; chartType: string; title: string; option: Record<string, unknown> };
 
 // 消息类型 - 使用内容块
 export interface Message {

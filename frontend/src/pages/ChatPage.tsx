@@ -13,6 +13,7 @@ import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ThinkingProcess from '@/components/ThinkingProcess';
+import ChartRenderer from '@/components/ChartRenderer';
 import type { Message, ContentBlock } from '@/types';
 
 export default function ChatPage() {
@@ -122,7 +123,7 @@ export default function ChatPage() {
             <p className="text-slate-500 max-w-md">
               用自然语言描述您想查询的数据，例如：
               <br />
-              <span className="text-slate-400">"查询上个月销售额前10的产品"</span>
+              <span className="text-slate-400">"查询上个月销售额前 10 的产品"</span>
             </p>
           </div>
         ) : (
@@ -253,7 +254,7 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-// 内容块渲染器 - v2.2 简化版
+// 内容块渲染器 - 支持文本和图表
 function ContentBlockRenderer({ block }: { block: ContentBlock }) {
   if (block.type === 'text') {
     return (
@@ -264,5 +265,16 @@ function ContentBlockRenderer({ block }: { block: ContentBlock }) {
       </div>
     );
   }
+
+  if (block.type === 'chart') {
+    return (
+      <ChartRenderer
+        chartType={block.chartType}
+        title={block.title}
+        option={block.option}
+      />
+    );
+  }
+
   return null;
 }

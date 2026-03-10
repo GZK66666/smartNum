@@ -183,7 +183,7 @@ class ApiService {
                 break;
 
               case 'tool_call':
-                callbacks.onThinking?.(`调用工具: ${data.tool}`);
+                callbacks.onThinking?.(`调用工具：${data.tool}`);
                 break;
 
               case 'sql_generation':
@@ -194,6 +194,25 @@ class ApiService {
               case 'message':
                 if (data.content) {
                   blocks.push({ type: 'text', content: data.content });
+                }
+                break;
+
+              // 处理 render_chart 工具调用结果
+              case 'tool_result':
+                if (data.tool === 'render_chart' && data.output) {
+                  try {
+                    const chartData = JSON.parse(data.output);
+                    if (chartData.option) {
+                      blocks.push({
+                        type: 'chart',
+                        chartType: chartData.chart_type || 'bar',
+                        title: chartData.title || '图表',
+                        option: chartData.option,
+                      });
+                    }
+                  } catch (e) {
+                    console.error('[SSE] 解析图表数据失败:', e);
+                  }
                 }
                 break;
 

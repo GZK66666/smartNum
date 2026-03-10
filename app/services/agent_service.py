@@ -116,6 +116,7 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询
 2. **按需查结构**：根据用户问题，只调用 `get_table_schema` 查询相关表的结构
 3. **执行查询**：使用 `run_sql` 执行 SQL 获取数据
 4. **回答问题**：用自然语言回答，数据结果用 Markdown 表格展示
+5. **可视化（可选）**：如果用户要求图表，调用 `render_chart` 生成 ECharts 配置
 
 ## 错误处理与迭代修复
 
@@ -160,11 +161,16 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询
 执行 SQL SELECT 查询并返回结果。只支持 SELECT 语句。
 **返回结果包含 success 字段，失败时会返回 error 信息。**
 
+### render_chart
+当用户要求可视化时调用此工具，生成 ECharts 图表配置。
+**只在用户明确要求图表时使用，参数包含图表类型和数据。**
+
 ## 输出规则
 
 1. 数据结果用 Markdown 表格展示
 2. 用简洁的自然语言解读关键发现
 3. 直接回答用户的问题
+4. 用户要求图表时，调用 render_chart 工具生成配置
 
 ## 安全规则
 
@@ -458,6 +464,131 @@ def run_sql(
     return _run_async(_execute)
 
 
+def render_chart(
+    chart_type: str,
+    title: str,
+    data: list,
+    x_field: str = None,
+    y_field: str = None,
+) -> dict:
+    """
+    生成 ECharts 图表配置。
+
+    当用户要求可视化时调用此工具。智能体根据查询结果选择合适的图表类型，
+    并指定数据字段映射，工具会生成完整的 ECharts 配置选项。
+
+    Args:
+        chart_type: 图表类型 - bar (柱状图), line (折线图), pie (饼图), scatter (散点图), area (面积图)
+        title: 图表标题
+        data: 数据数组，包含图表需要展示的所有数据
+        x_field: X 轴字段名（饼图不需要）
+        y_field: Y 轴字段名（饼图为数值字段，其他为数值字段）
+
+    Returns:
+        ECharts 配置对象，可直接传递给前端的 ECharts 组件
+
+    Examples:
+        # 柱状图示例
+        render_chart(
+            chart_type="bar",
+            title="销售额前 10 产品",
+            data=[
+                {"product": "产品 A", "sales": 1000},
+                {"product": "产品 B", "sales": 800},
+            ],
+            x_field="product",
+            y_field="sales"
+        )
+
+        # 饼图示例
+        render_chart(
+            chart_type="pie",
+            title="销售占比",
+            data=[
+                {"category": "类别 A", "value": 400},
+                {"category": "类别 B", "value": 300},
+            ],
+            y_field="value"
+        )
+    """
+    # 图表类型映射
+    chart_type_map = {
+        "bar": "bar",
+        "line": "line",
+        "pie": "pie",
+        "scatter": "scatter",
+        "area": "line",
+    }
+
+    series_name = y_field or "数值"
+    x_data = []
+    y_data = []
+
+    for item in data:
+        if x_field:
+            x_data.append(item.get(x_field, ""))
+        y_data.append(item.get(y_field or series_name, 0))
+
+    # 生成 ECharts 配置
+    if chart_type == "pie":
+        pie_data = []
+        for i, item in enumerate(data):
+            pie_data.append({
+                "name": item.get(x_field or f"项{i}"),
+                "value": item.get(y_field or series_name, 0)
+            })
+
+        option = {
+            "title": {"text": title, "left": "center"},
+            "tooltip": {
+                "trigger": "item",
+                "formatter": "{b}: {c} ({d}%)"
+            },
+            "legend": {
+                "orient": "vertical",
+                "left": "left"
+            },
+            "series": [{
+                "name": title,
+                "type": "pie",
+                "radius": "60%",
+                "data": pie_data,
+                "emphasis": {
+                    "itemStyle": {
+                        "shadowBlur": 10,
+                        "shadowOffsetX": 0,
+                        "shadowColor": "rgba(0, 0, 0, 0.5)"
+                    }
+                }
+            }]
+        }
+    else:
+        option = {
+            "title": {"text": title},
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "shadow"}
+            },
+            "xAxis": {
+                "type": "category",
+                "data": x_data,
+                "axisLabel": {"rotate": 0 if len(x_data) <= 10 else 45}
+            },
+            "yAxis": {"type": "value"},
+            "series": [{
+                "name": series_name,
+                "type": chart_type_map.get(chart_type, "bar"),
+                "data": y_data,
+                **({"areaStyle": {"opacity": 0.3}} if chart_type == "area" else {})
+            }]
+        }
+
+        if len(x_data) > 10:
+            option["grid"] = {"bottom": "15%"}
+
+    return {"chart_type": chart_type, "title": title, "option": option}
+
+
 def _run_async(coro_func):
     """辅助函数：在同步上下文中运行异步函数
 
@@ -509,7 +640,7 @@ def get_agent():
     _agent = create_deep_agent(
         name="smartnum-agent",
         model=llm,
-        tools=[list_tables, get_table_schema, run_sql],
+        tools=[list_tables, get_table_schema, run_sql, render_chart],
         system_prompt=SYSTEM_PROMPT,
     )
 
@@ -691,7 +822,7 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
                         return ToolResultEvent(
                             tool=msg_name,
                             id=str(uuid.uuid4()),
-                            output=str(content)[:500] if content else ""
+                            output=json.dumps(content) if isinstance(content, dict) else str(content)[:2000] if content else ""
                         )
 
                     # 过滤掉 human/user 消息
@@ -721,7 +852,7 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
                         return ToolResultEvent(
                             tool=msg_name,
                             id=str(uuid.uuid4()),
-                            output=str(msg_content)[:500] if msg_content else ""
+                            output=msg_content if isinstance(msg_content, dict) else str(msg_content)[:2000] if msg_content else ""
                         )
 
                     if msg_type == "human":
