@@ -121,6 +121,8 @@ async def download_export_file(download_id: str):
 
     根据 download_id 下载导出的 CSV 或 Excel 文件。
     """
+    import urllib.parse
+
     file_info = get_export_file(download_id)
 
     if file_info is None:
@@ -132,11 +134,15 @@ async def download_export_file(download_id: str):
             },
         )
 
+    # 处理中文文件名：使用 RFC 5987 编码
+    filename = file_info["filename"]
+    encoded_filename = urllib.parse.quote(filename, encoding='utf-8')
+
     return Response(
         content=file_info["content"],
         media_type=file_info["mime_type"],
         headers={
-            "Content-Disposition": f'attachment; filename="{file_info["filename"]}"'
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
         }
     )
 
