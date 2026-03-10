@@ -24,6 +24,9 @@ from app.models.schemas import (
     ExportLimit,
 )
 
+# 导入 ORM 模型（用于数据库表创建）
+from app.models import models  # noqa
+
 __all__ = [
     "DatabaseType",
     "DataSourceStatus",
