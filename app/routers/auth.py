@@ -1,6 +1,6 @@
 """用户认证路由"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
@@ -177,8 +177,8 @@ async def get_current_user_info(
 
 @router.post("/change-password")
 async def change_password(
-    old_password: str = Field(..., description="原密码"),
-    new_password: str = Field(..., min_length=6, description="新密码"),
+    old_password: str = Body(..., embed=True, description="原密码"),
+    new_password: str = Body(..., embed=True, min_length=6, description="新密码"),
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
