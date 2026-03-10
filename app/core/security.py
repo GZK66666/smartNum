@@ -1,19 +1,54 @@
 """安全工具模块"""
 
 import base64
-import hashlib
-import os
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import bcrypt
 
 from app.core import get_settings
 
 settings = get_settings()
 
 
-class PasswordEncryption:
-    """密码加密工具（内存加密存储）"""
+# ==================== 密码哈希（bcrypt） ====================
+
+def hash_password(password: str) -> str:
+    """
+    使用 bcrypt 哈希密码
+
+    Args:
+        password: 原始密码
+
+    Returns:
+        bcrypt 哈希值
+    """
+    salt = bcrypt.gensalt(rounds=12)
+    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed.decode('utf-8')
+
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    """
+    验证密码
+
+    Args:
+        password: 原始密码
+        hashed_password: bcrypt 哈希值
+
+    Returns:
+        验证成功返回 True，失败返回 False
+    """
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
+    except Exception:
+        return False
+
+
+# ==================== 数据源密码加密（Fernet） ====================
+
+class DataEncryption:
+    """数据加密工具（用于数据源密码等）"""
 
     def __init__(self):
         # 使用配置中的密钥生成 Fernet 密钥
@@ -22,7 +57,6 @@ class PasswordEncryption:
 
     def _derive_key(self, secret: str) -> bytes:
         """从密钥派生 Fernet 密钥"""
-        # 使用固定的 salt（内存加密，不需要持久化）
         salt = b'smartnum_salt_v1'
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
@@ -33,36 +67,36 @@ class PasswordEncryption:
         key = base64.urlsafe_b64encode(kdf.derive(secret.encode()))
         return key
 
-    def encrypt(self, password: str) -> str:
-        """加密密码"""
-        if not password:
+    def encrypt(self, data: str) -> str:
+        """加密数据"""
+        if not data:
             return ""
-        return self._fernet.encrypt(password.encode()).decode()
+        return self._fernet.encrypt(data.encode()).decode()
 
     def decrypt(self, encrypted: str) -> str:
-        """解密密码"""
+        """解密数据"""
         if not encrypted:
             return ""
         return self._fernet.decrypt(encrypted.encode()).decode()
 
 
 # 全局加密实例
-_password_encryption = None
+_data_encryption = None
 
 
-def get_password_encryption() -> PasswordEncryption:
-    """获取密码加密实例（单例）"""
-    global _password_encryption
-    if _password_encryption is None:
-        _password_encryption = PasswordEncryption()
-    return _password_encryption
+def get_data_encryption() -> DataEncryption:
+    """获取数据加密实例（单例）"""
+    global _data_encryption
+    if _data_encryption is None:
+        _data_encryption = DataEncryption()
+    return _data_encryption
 
 
-def encrypt_password(password: str) -> str:
-    """加密密码（便捷函数）"""
-    return get_password_encryption().encrypt(password)
+def encrypt_data(data: str) -> str:
+    """加密数据（便捷函数）"""
+    return get_data_encryption().encrypt(data)
 
 
-def decrypt_password(encrypted: str) -> str:
-    """解密密码（便捷函数）"""
-    return get_password_encryption().decrypt(encrypted)
+def decrypt_data(encrypted: str) -> str:
+    """解密数据（便捷函数）"""
+    return get_data_encryption().decrypt(data)

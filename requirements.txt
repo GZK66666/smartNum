@@ -1,4 +1,4 @@
-# SmartNum - 智能问数系统依赖
+# SmartNum V3.0 - 智能问数系统依赖
 
 # Web 框架
 fastapi>=0.115.0
@@ -24,6 +24,8 @@ deepagents>=0.1.0
 
 # 安全
 cryptography>=42.0.0
+bcrypt>=4.1.0
+python-jose[cryptography]>=3.3.0
 
 # 工具
 python-dotenv>=1.0.0
