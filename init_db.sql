@@ -79,7 +79,7 @@ CREATE TABLE messages (
     session_id VARCHAR(36) NOT NULL COMMENT '关联会话 ID',
     role VARCHAR(10) NOT NULL COMMENT '角色：user/assistant',
     content TEXT NOT NULL COMMENT '消息内容',
-    sql TEXT COMMENT '生成的 SQL 语句',
+    `sql` TEXT COMMENT '生成的 SQL 语句',
     result LONGTEXT COMMENT '查询结果 (JSON)',
     result_truncated TINYINT DEFAULT 0 COMMENT '结果是否截断：1-是 0-否',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
