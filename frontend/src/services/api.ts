@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import type {
   DataSource,
   DataSourceConfig,
@@ -8,6 +8,10 @@ import type {
   ApiResponse,
   ThinkingEvent,
   ContentBlock,
+  User,
+  LoginRequest,
+  RegisterRequest,
+  AuthResponse,
 } from '@/types';
 
 const API_BASE = '/api';
@@ -16,6 +20,7 @@ const SSE_API_BASE = 'http://localhost:8000/api';
 
 class ApiService {
   private client: AxiosInstance;
+  private authToken: string | null = null;
 
   constructor() {
     this.client = axios.create({
@@ -24,6 +29,17 @@ class ApiService {
         'Content-Type': 'application/json',
       },
     });
+
+    // 请求拦截器 - 自动添加 token
+    this.client.interceptors.request.use(
+      (config: InternalAxiosRequestConfig) => {
+        if (this.authToken) {
+          config.headers.Authorization = `Bearer ${this.authToken}`;
+        }
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
 
     this.client.interceptors.response.use(
       (response) => response,
@@ -39,6 +55,28 @@ class ApiService {
         return Promise.reject(error);
       }
     );
+  }
+
+  // 设置认证 token
+  setAuthToken(token: string | null) {
+    this.authToken = token;
+  }
+
+  // ==================== 用户认证 ====================
+
+  async login(credentials: LoginRequest): Promise<AuthResponse> {
+    const response = await this.client.post<AuthResponse>('/auth/login', credentials);
+    return response.data;
+  }
+
+  async register(data: RegisterRequest): Promise<AuthResponse> {
+    const response = await this.client.post<AuthResponse>('/auth/register', data);
+    return response.data;
+  }
+
+  async getCurrentUser(): Promise<User> {
+    const response = await this.client.get<User>('/auth/me');
+    return response.data;
   }
 
   // ==================== 数据源管理 ====================
@@ -118,9 +156,15 @@ class ApiService {
 
     console.log('[SSE] 开始流式请求');
 
+    // 添加 token 到 SSE 请求
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.authToken) {
+      headers.Authorization = `Bearer ${this.authToken}`;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ content }),
     });
 
@@ -240,6 +284,19 @@ class ApiService {
               case 'error':
                 error = data.message || '处理失败';
                 callbacks.onError?.(error);
+                break;
+
+              case 'done':
+                // 从 done 事件的 data 字段中提取最终内容
+                if (data.data) {
+                  const finalData = data.data;
+                  if (finalData.content && !blocks.some(b => b.type === 'text' && b.content === finalData.content)) {
+                    blocks.push({ type: 'text', content: finalData.content });
+                  }
+                  if (finalData.sql && !sql) {
+                    sql = finalData.sql;
+                  }
+                }
                 break;
             }
           } catch (e) {

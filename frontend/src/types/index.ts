@@ -177,3 +177,32 @@ export interface AnalysisResult {
   recommendations: string[];
   data_used: string[];
 }
+
+// ==================== V3.0 用户认证类型 ====================
+
+export interface User {
+  user_id: string;
+  username: string;
+  email: string | null;
+  status: number;
+  created_at?: string;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface RegisterRequest {
+  username: string;
+  password: string;
+  email?: string | null;
+}
+
+export interface AuthResponse {
+  user_id: string;
+  username: string;
+  email: string | null;
+  access_token: string;
+  token_type: string;
+}

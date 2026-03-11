@@ -205,20 +205,40 @@ async def send_message_stream(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """发送消息（流式 SSE）"""
+    """发送消息（流式 SSE）
+
+    注意：流式处理需要使用独立的数据库会话，避免依赖注入的会话过早关闭。
+    这里先验证会话和数据源存在，然后使用 SessionService.stream_with_own_db 进行流式处理。
+    """
+    # 使用依赖注入的数据库会话进行验证
     session_service = SessionService(db, user_id)
     datasource_service = DataSourceService(db, user_id)
 
     session = await session_service.get_session(session_id)
     if not session:
-        raise ValueError(f"会话不存在：{session_id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": ErrorCode.SESSION_NOT_FOUND,
+                "message": "会话不存在",
+            },
+        )
 
     datasource = await datasource_service.get_datasource(session.datasource_id)
     if not datasource:
-        raise ValueError(f"数据源不存在：{session.datasource_id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": ErrorCode.DATASOURCE_NOT_FOUND,
+                "message": "数据源不存在",
+            },
+        )
 
+    # 使用独立的数据库会话进行流式处理
+    # 这样可以避免依赖注入的数据库会话在路由函数返回时被关闭
     return StreamingResponse(
-        session_service.send_message_stream(
+        SessionService.stream_with_own_db(
+            user_id=user_id,
             session_id=session_id,
             content=request.content,
             datasource=datasource,

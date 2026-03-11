@@ -18,6 +18,22 @@ class SessionService:
     def __init__(self, db: AsyncSession, user_id: str):
         self.db = db
         self.user_id = user_id
+        self._owns_db = False  # 标记是否拥有数据库会话
+
+    @classmethod
+    async def create_for_stream(cls, user_id: str) -> "SessionService":
+        """为流式处理创建独立的 SessionService 实例（使用独立数据库会话）"""
+        from app.models.database import async_session_maker
+        db = async_session_maker()
+        instance = cls(db, user_id)
+        instance._owns_db = True
+        return instance
+
+    async def close(self):
+        """关闭数据库会话（如果由本实例创建）"""
+        if self._owns_db and self.db:
+            await self.db.commit()
+            await self.db.close()
 
     async def create_session(self, datasource_id: str) -> Session:
         """创建会话"""
@@ -215,6 +231,31 @@ class SessionService:
                 sql=result_data.get("sql"),
                 result=result_data,
             )
+
+    @classmethod
+    async def stream_with_own_db(
+        cls,
+        user_id: str,
+        session_id: str,
+        content: str,
+        datasource: DataSource,
+    ) -> AsyncGenerator[str, None]:
+        """
+        使用独立数据库会话的流式处理方法
+
+        这个方法会创建自己的数据库会话，并在流结束后正确关闭。
+        适用于 StreamingResponse 场景，避免依赖注入的数据库会话过早关闭。
+        """
+        service = await cls.create_for_stream(user_id)
+        try:
+            async for chunk in service.send_message_stream(
+                session_id=session_id,
+                content=content,
+                datasource=datasource,
+            ):
+                yield chunk
+        finally:
+            await service.close()
 
 
 # ==================== 便捷函数（兼容旧接口） ====================
