@@ -28,7 +28,7 @@ def get_database_url() -> str:
 # 创建异步引擎
 engine = create_async_engine(
     get_database_url(),
-    echo=settings.debug,  # 调试模式输出 SQL
+    echo=False,  # 关闭 SQL 日志输出
     pool_size=20,  # 连接池大小
     max_overflow=40,  # 最大溢出连接数
     pool_pre_ping=True,  # 连接前 ping 检测

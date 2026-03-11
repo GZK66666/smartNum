@@ -13,10 +13,48 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Optional, List
 from dataclasses import dataclass, asdict
 import asyncio
+from contextvars import ContextVar
 
 from app.core import get_settings
 
 settings = get_settings()
+
+
+# ==================== 请求上下文（传递数据库连接参数） ====================
+
+# 当前请求的数据库连接上下文
+_db_context: ContextVar[dict] = ContextVar('db_context')
+
+
+def set_db_context(
+    datasource_id: str,
+    db_type: str,
+    host: str,
+    port: int,
+    database: str,
+    username: str,
+    password: str,
+    schema_name: Optional[str] = None,
+):
+    """设置当前请求的数据库连接上下文"""
+    _db_context.set({
+        "datasource_id": datasource_id,
+        "db_type": db_type,
+        "host": host,
+        "port": port,
+        "database": database,
+        "username": username,
+        "password": password,
+        "schema_name": schema_name,
+    })
+
+
+def get_db_context() -> Optional[dict]:
+    """获取当前请求的数据库连接上下文"""
+    try:
+        return _db_context.get()
+    except LookupError:
+        return None
 
 
 # ==================== SSE 事件类型定义 ====================
@@ -202,20 +240,21 @@ def list_tables(datasource_id: str) -> str:
     """
 
     async def _list_tables():
-        from app.services import datasource_service, db_service
+        from app.services import db_service
 
-        ds = await datasource_service.get_datasource(datasource_id)
-        if ds is None:
-            return "错误: 数据源不存在"
+        # 从上下文获取数据库连接参数
+        ctx = get_db_context()
+        if ctx is None:
+            return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
 
         # 获取简化的表信息（只包含表名和注释）
         url = db_service.get_database_url(
-            ds["type"].value,
-            ds["host"],
-            ds["port"],
-            ds["database"],
-            ds["username"],
-            ds["password"],
+            ctx["db_type"],
+            ctx["host"],
+            ctx["port"],
+            ctx["database"],
+            ctx["username"],
+            ctx["password"],
         )
 
         from sqlalchemy import text
@@ -229,7 +268,7 @@ def list_tables(datasource_id: str) -> str:
                 lines.append("| 序号 | 表名 | 说明 |")
                 lines.append("|------|------|------|")
 
-                if ds["type"].value == "mysql":
+                if ctx["db_type"] == "mysql":
                     result = await conn.execute(
                         text("""
                             SELECT TABLE_NAME, TABLE_COMMENT
@@ -237,7 +276,7 @@ def list_tables(datasource_id: str) -> str:
                             WHERE TABLE_SCHEMA = :db
                             ORDER BY TABLE_NAME
                         """),
-                        {"db": ds["database"]},
+                        {"db": ctx["database"]},
                     )
                     rows = result.fetchall()
 
@@ -246,8 +285,8 @@ def list_tables(datasource_id: str) -> str:
                         table_comment = row[1] or "-"
                         lines.append(f"| {i} | {table_name} | {table_comment} |")
 
-                elif ds["type"].value == "postgresql":
-                    schema = ds.get("schema_name") or "public"
+                elif ctx["db_type"] == "postgresql":
+                    schema = ctx.get("schema_name") or "public"
                     result = await conn.execute(
                         text("""
                             SELECT table_name, obj_description((table_schema || '.' || table_name)::regclass) as table_comment
@@ -264,7 +303,7 @@ def list_tables(datasource_id: str) -> str:
                         table_comment = row[1] or "-"
                         lines.append(f"| {i} | {table_name} | {table_comment} |")
 
-                elif ds["type"].value == "sqlite":
+                elif ctx["db_type"] == "sqlite":
                     result = await conn.execute(
                         text("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
                     )
@@ -301,19 +340,20 @@ def get_table_schema(
     """
 
     async def _get_table_schema():
-        from app.services import datasource_service, db_service
+        from app.services import db_service
 
-        ds = await datasource_service.get_datasource(datasource_id)
-        if ds is None:
-            return "错误: 数据源不存在"
+        # 从上下文获取数据库连接参数
+        ctx = get_db_context()
+        if ctx is None:
+            return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
 
         url = db_service.get_database_url(
-            ds["type"].value,
-            ds["host"],
-            ds["port"],
-            ds["database"],
-            ds["username"],
-            ds["password"],
+            ctx["db_type"],
+            ctx["host"],
+            ctx["port"],
+            ctx["database"],
+            ctx["username"],
+            ctx["password"],
         )
 
         from sqlalchemy import text
@@ -325,7 +365,7 @@ def get_table_schema(
             async with engine.connect() as conn:
                 lines = [f"# 表结构: {table_name}\n"]
 
-                if ds["type"].value == "mysql":
+                if ctx["db_type"] == "mysql":
                     # 获取表注释
                     table_result = await conn.execute(
                         text("""
@@ -333,7 +373,7 @@ def get_table_schema(
                             FROM information_schema.TABLES
                             WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :table
                         """),
-                        {"db": ds["database"], "table": table_name},
+                        {"db": ctx["database"], "table": table_name},
                     )
                     table_row = table_result.fetchone()
                     if table_row and table_row[0]:
@@ -353,7 +393,7 @@ def get_table_schema(
                             WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :table
                             ORDER BY ORDINAL_POSITION
                         """),
-                        {"db": ds["database"], "table": table_name},
+                        {"db": ctx["database"], "table": table_name},
                     )
                     column_rows = columns_result.fetchall()
 
@@ -369,8 +409,8 @@ def get_table_schema(
                         col_comment = col[5] or "-"
                         lines.append(f"| {col_name} | {col_type} | {nullable} | {col_key} | {col_default} | {col_comment} |")
 
-                elif ds["type"].value == "postgresql":
-                    schema = ds.get("schema_name") or "public"
+                elif ctx["db_type"] == "postgresql":
+                    schema = ctx.get("schema_name") or "public"
 
                     # 获取列信息
                     columns_result = await conn.execute(
@@ -402,7 +442,7 @@ def get_table_schema(
                         col_comment = col[5] or "-"
                         lines.append(f"| {col_name} | {col_type} | {nullable} | {col_key} | {col_default} | {col_comment} |")
 
-                elif ds["type"].value == "sqlite":
+                elif ctx["db_type"] == "sqlite":
                     # 获取表结构
                     pragma_result = await conn.execute(
                         text(f"PRAGMA table_info({table_name})")
@@ -449,19 +489,20 @@ def run_sql(
     """
 
     async def _execute():
-        from app.services import datasource_service, db_service
+        from app.services import db_service
 
-        ds = await datasource_service.get_datasource(datasource_id)
-        if ds is None:
-            return {"success": False, "error": "数据源不存在"}
+        # 从上下文获取数据库连接参数
+        ctx = get_db_context()
+        if ctx is None:
+            return {"success": False, "error": "未找到数据库连接上下文"}
 
         result = await db_service.execute_query(
-            db_type=ds["type"].value,
-            host=ds["host"],
-            port=ds["port"],
-            database=ds["database"],
-            username=ds["username"],
-            password=ds["password"],
+            db_type=ctx["db_type"],
+            host=ctx["host"],
+            port=ctx["port"],
+            database=ctx["database"],
+            username=ctx["username"],
+            password=ctx["password"],
             sql=sql,
             max_rows=limit,
         )
@@ -746,9 +787,14 @@ def _run_async(coro_func):
     if loop is not None:
         # 已有运行中的事件循环，需要在新线程中运行
         import concurrent.futures
+        from contextvars import copy_context
+
+        # 获取当前上下文（包含 ContextVar 值）
+        ctx = copy_context()
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, coro_func())
+            # 在新线程中运行时，使用当前上下文
+            future = executor.submit(ctx.run, asyncio.run, coro_func())
             return future.result()
     else:
         # 没有运行中的事件循环，直接运行
@@ -813,10 +859,21 @@ async def process_query_stream(
     def log_step(step_name: str, detail: str = ""):
         nonlocal step_counter
         step_counter += 1
-        logger.info(f"[步骤 {step_counter}] {step_name}: {detail}")
         print(f"[Agent] 步骤 {step_counter}: {step_name} - {detail}")
 
     log_step("开始处理", f"用户问题: {query[:50]}...")
+
+    # 设置数据库连接上下文（供工具函数使用）
+    set_db_context(
+        datasource_id=datasource_id,
+        db_type=db_type,
+        host=host,
+        port=port,
+        database=database,
+        username=username,
+        password=password,
+        schema_name=schema_name,
+    )
 
     # 发送思考事件
     yield ThinkingEvent(content="正在分析您的问题...").to_dict()
@@ -853,18 +910,60 @@ async def process_query_stream(
 
     # 添加当前问题
     messages.append({"role": "user", "content": query})
-    log_step("构建消息", f"历史消息数: {len(messages) - 2}")
+    log_step("构建消息", f"历史消息数：{len(messages) - 2}")
+
+    # 流式调用 - 使用生产者线程避免阻塞事件循环
+    # 捕获当前上下文（包含 db_context）
+    from contextvars import copy_context
+    current_ctx = copy_context()
+
+    # 最终结果
+    final_result = {
+        "content": "",
+        "sql": None,
+        "error": None,
+    }
+
+    # 使用队列在线程间传递数据
+    import queue
+    import threading
+
+    chunk_queue = queue.Queue()
+    producer_done = threading.Event()
+    producer_error = [None]
+
+    def produce_chunks():
+        """生产者：在复制的上下文中运行 agent.stream()"""
+        try:
+            for chunk in agent.stream({"messages": messages}, config=config):
+                chunk_queue.put(chunk)
+        except Exception as e:
+            producer_error[0] = e
+        finally:
+            producer_done.set()
+
+    # 启动生产者线程（传递捕获的上下文）
+    producer_thread = threading.Thread(
+        target=lambda: current_ctx.run(produce_chunks),
+        daemon=True
+    )
+    producer_thread.start()
 
     try:
-        # 最终结果
-        final_result = {
-            "content": "",
-            "sql": None,
-            "error": None,
-        }
+        # 消费者：从队列取出 chunk 并 yield
+        while True:
+            # 检查是否完成
+            if producer_done.is_set() and chunk_queue.empty():
+                break
 
-        # 流式调用
-        for chunk in agent.stream({"messages": messages}, config=config):
+            # 尝试获取 chunk
+            try:
+                chunk = chunk_queue.get(timeout=0.1)
+            except queue.Empty:
+                if producer_error[0]:
+                    raise producer_error[0]
+                continue
+
             event = _parse_agent_chunk(chunk)
 
             if event:
@@ -872,20 +971,14 @@ async def process_query_stream(
                 event_type = type(event).__name__
                 if isinstance(event, ToolCallEvent):
                     log_step("工具调用", f"{event.tool}")
-                    if event.input:
-                        # 打印关键参数
-                        input_preview = {k: str(v)[:100] for k, v in event.input.items()}
-                        logger.info(f"  参数: {input_preview}")
                 elif isinstance(event, ToolResultEvent):
                     log_step("工具结果", f"{event.tool} - {len(event.output or '')} 字符")
                 elif isinstance(event, MessageEvent):
                     log_step("生成回复", f"{len(event.content or '')} 字符")
                 elif isinstance(event, SQLGenerationEvent):
-                    log_step("SQL生成", event.sql[:50] if event.sql else "")
+                    log_step("SQL 生成", event.sql[:50] if event.sql else "")
                 elif isinstance(event, SQLExecutionEvent):
-                    log_step("SQL执行", f"状态: {event.status}")
-                else:
-                    logger.info(f"[Agent] 事件: {event_type}")
+                    log_step("SQL 执行", f"状态：{event.status}")
 
                 # 收集消息内容
                 if isinstance(event, MessageEvent) and event.content:
@@ -904,16 +997,17 @@ async def process_query_stream(
                     yield SQLExecutionEvent(status="completed").to_dict()
 
                 yield event.to_dict()
+                await asyncio.sleep(0)
 
-        log_step("处理完成", f"总步骤数: {step_counter}")
+        log_step("处理完成", f"总步骤数：{step_counter}")
         # 发送完成事件
         yield {"type": "done", "message": "处理完成", "data": final_result}
 
     except Exception as e:
         log_step("处理出错", str(e))
-        logger.exception("Agent处理异常")
-        yield ErrorEvent(message=f"处理出错: {str(e)}").to_dict()
+        yield ErrorEvent(message=f"处理出错：{str(e)}").to_dict()
         yield DoneEvent(message="处理结束").to_dict()
+
 
 
 def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
