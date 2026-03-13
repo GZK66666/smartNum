@@ -54,6 +54,7 @@ class SessionService:
             id=str(uuid.uuid4()),
             user_id=self.user_id,
             datasource_id=datasource_id,
+            title="新对话",  # 设置默认标题
             created_at=datetime.utcnow(),
             last_active_at=datetime.utcnow(),
         )
@@ -83,14 +84,90 @@ class SessionService:
         await self.db.flush()
         return True
 
-    async def list_sessions(self) -> List[Session]:
-        """获取会话列表"""
-        result = await self.db.execute(
+    async def list_sessions(
+        self,
+        cursor: str | None = None,
+        limit: int = 20,
+    ) -> tuple[List[Session], str | None, bool]:
+        """获取会话列表（支持无限滚动）
+
+        Args:
+            cursor: 分页游标（base64 编码的最后一条记录的 last_active_at + id）
+            limit: 每页数量
+
+        Returns:
+            (sessions, next_cursor, has_more): 会话列表、下一页游标、是否还有更多
+        """
+        import base64
+
+        query = (
             select(Session)
-            .where(Session.user_id == self.user_id)
-            .order_by(desc(Session.last_active_at))
+            .where(
+                Session.user_id == self.user_id,
+                Session.is_archived == 0,
+            )
+            .order_by(desc(Session.last_active_at), desc(Session.id))
+            .limit(limit + 1)  # 多取一条判断是否有更多
         )
-        return list(result.scalars().all())
+
+        # 解析游标
+        if cursor:
+            try:
+                decoded = base64.b64decode(cursor).decode('utf-8')
+                last_active_at_str, last_id = decoded.split('|')
+                last_active_at = datetime.fromisoformat(last_active_at_str)
+                # 查询比当前游标更晚的记录
+                query = query.where(
+                    and_(
+                        Session.last_active_at <= last_active_at,
+                        Session.id < last_id if Session.last_active_at == last_active_at else True
+                    )
+                )
+            except Exception as e:
+                print(f"[SessionService] 解析游标失败：{e}")
+
+        result = await self.db.execute(query)
+        sessions = list(result.scalars().all())
+
+        # 判断是否有更多
+        has_more = len(sessions) > limit
+        if has_more:
+            sessions = sessions[:limit]
+
+        # 生成下一页游标
+        next_cursor = None
+        if sessions and has_more:
+            last_session = sessions[-1]
+            cursor_data = f"{last_session.last_active_at.isoformat()}|{last_session.id}"
+            next_cursor = base64.b64encode(cursor_data.encode('utf-8')).decode('utf-8')
+
+        return sessions, next_cursor, has_more
+
+    async def update_session_title(self, session_id: str, title: str) -> Optional[Session]:
+        """更新会话标题"""
+        session = await self.get_session(session_id)
+        if not session:
+            return None
+
+        session.title = title[:200] if title else None  # 限制标题长度
+        await self.db.flush()
+        return session
+
+    async def auto_generate_title(self, session_id: str, first_message: str) -> Optional[Session]:
+        """基于首条消息自动生成会话标题（调用 LLM）"""
+        session = await self.get_session(session_id)
+        if not session:
+            return None
+
+        # 调用 LLM 生成标题
+        from app.services.agent_service import generate_session_title
+        
+        title = generate_session_title(first_message)
+        
+
+        session.title = title
+        await self.db.flush()
+        return session
 
     async def get_message_history(self, session_id: str, limit: int = 20) -> List[Message]:
         """获取消息历史"""
@@ -231,6 +308,11 @@ class SessionService:
                 sql=result_data.get("sql"),
                 result=result_data,
             )
+
+        # 如果是第一条消息，自动生成标题
+        if len(history) == 0:
+            
+            await self.auto_generate_title(session_id, content)
 
     @classmethod
     async def stream_with_own_db(

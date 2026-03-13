@@ -71,6 +71,9 @@ class Session(Base):
     id = Column(VARCHAR(36), primary_key=True, comment="会话 ID (UUID)")
     user_id = Column(VARCHAR(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, comment="所属用户 ID")
     datasource_id = Column(VARCHAR(36), ForeignKey("datasources.id", ondelete="CASCADE"), nullable=False, comment="关联数据源 ID")
+    title = Column(VARCHAR(200), comment="会话标题")
+    message_count = Column(Integer, default=0, comment="消息数量（缓存）")
+    is_archived = Column(Integer, default=0, comment="是否归档：1-是 0-否")
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
     last_active_at = Column(DateTime, default=datetime.utcnow, comment="最后活跃时间")
 

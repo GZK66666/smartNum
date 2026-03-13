@@ -43,6 +43,26 @@ export interface Session {
   created_at: string;
 }
 
+// 会话列表项（用于侧边栏展示）
+export interface SessionListItem {
+  id: string;
+  session_id?: string;  // 兼容后端返回
+  datasource_id: string;
+  datasource_name: string;
+  title: string | null;
+  message_count?: number;
+  created_at: string;
+  last_active_at: string;
+}
+
+// 会话列表响应（无限滚动）
+export interface SessionsResponse {
+  code: number;
+  data: SessionListItem[];
+  next_cursor?: string | null;
+  has_more: boolean;
+}
+
 export interface QueryResult {
   columns: string[];
   rows: (string | number | null)[][];

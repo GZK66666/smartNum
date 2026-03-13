@@ -4,6 +4,8 @@ import type {
   DataSourceConfig,
   SchemaInfo,
   Session,
+  SessionListItem,
+  SessionsResponse,
   Message,
   ApiResponse,
   ThinkingEvent,
@@ -130,6 +132,36 @@ class ApiService {
       { params: { limit } }
     );
     return response.data.data?.messages || [];
+  }
+
+  // ==================== 会话列表管理 ====================
+
+  async getSessions(params?: { cursor?: string; limit?: number; datasource_id?: string }): Promise<{
+    sessions: SessionListItem[];
+    next_cursor?: string | null;
+    has_more: boolean;
+  }> {
+    const response = await this.client.get<ApiResponse<SessionListItem[]>>('/sessions', {
+      params: params || {}
+    });
+    // 兼容旧版本响应格式
+    const data = response.data as unknown as SessionsResponse | ApiResponse<SessionListItem[]>;
+    if ('next_cursor' in data) {
+      return {
+        sessions: data.data || [],
+        next_cursor: data.next_cursor,
+        has_more: data.has_more,
+      };
+    }
+    return {
+      sessions: data.data || [],
+      next_cursor: null,
+      has_more: false,
+    };
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    await this.client.patch(`/sessions/${sessionId}`, { title });
   }
 
   async sendMessage(sessionId: string, content: string): Promise<Message> {

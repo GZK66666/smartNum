@@ -822,6 +822,7 @@ def get_agent():
         base_url=settings.llm_base_url,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
+        request_timeout=settings.llm_timeout,  # 添加超时设置
     )
 
     # 创建智能体 - 使用简化的工具集
@@ -835,7 +836,22 @@ def get_agent():
     return _agent
 
 
-# ==================== SSE 流式处理 ====================
+# ==================== 标题生成 ====================
+
+def generate_session_title(user_message: str) -> str:
+    """
+    根据用户第一条消息生成会话标题
+    直接用户户问题作为标题，去除多余内容
+    """
+    # 直接用户户问题作为标题，限制长度
+    title = user_message.strip()
+    
+    # 限制长度（最多 50 个字符）
+    if len(title) > 50:
+        title = title[:50] + "..."    
+    
+    return title
+
 
 async def process_query_stream(
     datasource_id: str,
@@ -912,11 +928,6 @@ async def process_query_stream(
     messages.append({"role": "user", "content": query})
     log_step("构建消息", f"历史消息数：{len(messages) - 2}")
 
-    # 流式调用 - 使用生产者线程避免阻塞事件循环
-    # 捕获当前上下文（包含 db_context）
-    from contextvars import copy_context
-    current_ctx = copy_context()
-
     # 最终结果
     final_result = {
         "content": "",
@@ -927,22 +938,33 @@ async def process_query_stream(
     # 使用队列在线程间传递数据
     import queue
     import threading
+    from contextvars import copy_context
 
     chunk_queue = queue.Queue()
     producer_done = threading.Event()
     producer_error = [None]
 
+    # 捕获当前的上下文（包含 db_context）
+    current_ctx = copy_context()
+
     def produce_chunks():
-        """生产者：在复制的上下文中运行 agent.stream()"""
+        """生产者：在线程中运行 agent.stream()"""
         try:
-            for chunk in agent.stream({"messages": messages}, config=config):
+            print("[Agent] 生产者线程：开始调用 agent.stream()")
+            stream_gen = agent.stream({"messages": messages}, config=config)
+            print("[Agent] 生产者线程：agent.stream() 返回，开始迭代")
+            for chunk in stream_gen:
+                print(f"[Agent] 生产者线程：获取到 chunk，类型={type(chunk)}")
                 chunk_queue.put(chunk)
+            print("[Agent] 生产者线程：stream 迭代完成")
         except Exception as e:
+            print(f"[Agent] 生产者线程：异常：{e}")
             producer_error[0] = e
         finally:
+            print("[Agent] 生产者线程：设置完成标志")
             producer_done.set()
 
-    # 启动生产者线程（传递捕获的上下文）
+    # 启动生产者线程，并使用复制的上下文运行
     producer_thread = threading.Thread(
         target=lambda: current_ctx.run(produce_chunks),
         daemon=True
@@ -958,7 +980,7 @@ async def process_query_stream(
 
             # 尝试获取 chunk
             try:
-                chunk = chunk_queue.get(timeout=0.1)
+                chunk = chunk_queue.get(timeout=0.5)
             except queue.Empty:
                 if producer_error[0]:
                     raise producer_error[0]

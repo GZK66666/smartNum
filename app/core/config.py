@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     llm_model_name: str = "qwen-plus"  # 阿里百炼：qwen-plus, qwen-turbo, qwen-max
     llm_temperature: float = 0.0
     llm_max_tokens: int = 4096
+    llm_timeout: int = 60  # LLM API 请求超时（秒）
 
     # 服务配置
     host: str = "0.0.0.0"

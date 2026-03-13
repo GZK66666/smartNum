@@ -9,8 +9,12 @@ interface AppState {
   schemaInfo: SchemaInfo | null;
   isLoadingDataSources: boolean;
 
-  // 会话状态
+  // 会话状态（无限滚动）
   currentSession: Session | null;
+  sessions: SessionListItem[];
+  sessionsCursor: string | null;  // 当前游标
+  sessionsHasMore: boolean;       // 是否还有更多
+  sessionsIsLoading: boolean;     // 是否正在加载
   messages: Message[];
   isLoadingMessages: boolean;
 
@@ -30,6 +34,11 @@ interface AppState {
   // 会话操作
   createSession: (datasourceId: string) => Promise<Session>;
   setCurrentSession: (session: Session | null) => void;
+  fetchSessions: (datasourceId?: string, reset?: boolean) => Promise<void>;  // reset=true 时重置列表
+  fetchMoreSessions: () => Promise<void>;  // 加载更多
+  refreshSessions: () => Promise<void>;     // 刷新列表
+  renameSession: (sessionId: string, title: string) => Promise<void>;
+  deleteSessionFromList: (sessionId: string) => Promise<void>;
   fetchMessages: (sessionId: string) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   clearMessages: () => void;
@@ -48,6 +57,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   isLoadingDataSources: false,
 
   currentSession: null,
+  sessions: [],
+  sessionsCursor: null,
+  sessionsHasMore: true,
+  sessionsIsLoading: false,
   messages: [],
   isLoadingMessages: false,
 
@@ -107,12 +120,77 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 会话操作
   createSession: async (datasourceId) => {
     const session = await apiService.createSession(datasourceId);
+    // 创建成功后，刷新会话列表
     set({ currentSession: session, messages: [] });
+    // 刷新列表以获取最新数据
+    get().refreshSessions();
     return session;
   },
 
   setCurrentSession: (session) => {
     set({ currentSession: session });
+  },
+
+  fetchSessions: async (datasourceId, reset = true) => {
+    if (get().sessionsIsLoading) return;
+
+    set({ sessionsIsLoading: true });
+    try {
+      // 如果是重置或者没有游标，从头开始
+      const cursor = reset ? null : get().sessionsCursor;
+
+      if (!cursor && reset) {
+        // 重置时清空列表
+        set({ sessions: [] });
+      }
+
+      const result = await apiService.getSessions({
+        cursor: cursor || undefined,
+        limit: 20,
+        datasource_id: datasourceId,
+      });
+
+      set((state) => ({
+        sessions: reset ? result.sessions : [...state.sessions, ...result.sessions],
+        sessionsCursor: result.next_cursor || null,
+        sessionsHasMore: result.has_more,
+        sessionsIsLoading: false,
+      }));
+    } catch (error) {
+      console.error('Failed to fetch sessions:', error);
+      set({ sessions: [], sessionsIsLoading: false, sessionsHasMore: false });
+    }
+  },
+
+  fetchMoreSessions: async () => {
+    const { sessionsHasMore, sessionsIsLoading } = get();
+
+    // 如果没有更多或者正在加载，直接返回
+    if (!sessionsHasMore || sessionsIsLoading) return;
+
+    await get().fetchSessions(undefined, false);
+  },
+
+  refreshSessions: async () => {
+    await get().fetchSessions(undefined, true);
+  },
+
+  renameSession: async (sessionId, title) => {
+    await apiService.renameSession(sessionId, title);
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId ? { ...s, title } : s
+      ),
+    }));
+  },
+
+  deleteSessionFromList: async (sessionId) => {
+    await apiService.deleteSession(sessionId);
+    set((state) => ({
+      sessions: state.sessions.filter((s) => s.id !== sessionId),
+      currentSession: state.currentSession?.session_id === sessionId ? null : state.currentSession,
+      messages: state.currentSession?.session_id === sessionId ? [] : state.messages,
+    }));
   },
 
   fetchMessages: async (sessionId) => {
@@ -127,8 +205,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   sendMessage: async (content) => {
-    const { currentSession, messages } = get();
-    if (!currentSession) return;
+    const state = get();
+    let session = state.currentSession;
+
+    // 如果没有当前会话，先创建会话（只在发送消息时创建）
+    if (!session) {
+      if (!state.currentDataSource) {
+        throw new Error('请先选择数据源');
+      }
+      session = await get().createSession(state.currentDataSource.id);
+    }
+
+    const messages = state.messages;
 
     // 添加用户消息（使用 blocks 格式）
     const userMessage: Message = {
@@ -148,7 +236,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       // 使用流式 API
       const response = await apiService.sendMessageStream(
-        currentSession.session_id,
+        session.session_id,
         content,
         {
           onEvent: (event) => {
@@ -170,6 +258,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         thinkingMessage: '',
         thinkingEvents: [],
       }));
+
+      // 发送消息后刷新会话列表（更新 last_active_at）
+      get().refreshSessions();
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : '发送消息失败';
       set((state) => ({
