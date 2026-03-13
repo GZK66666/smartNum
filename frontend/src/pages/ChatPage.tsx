@@ -18,6 +18,11 @@ import ExportCard from '@/components/ExportCard';
 import SessionSidebar from '@/components/SessionSidebar';
 import type { Message, ContentBlock, SessionListItem } from '@/types';
 
+// 过滤思考内容 (<think>...</think> 标签)
+function filterThinkingContent(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+}
+
 export default function ChatPage() {
   const {
     currentDataSource,
@@ -145,9 +150,9 @@ export default function ChatPage() {
       />
 
       {/* 主内容区 */}
-      <div className="flex-1 flex flex-col min-w-0 bg-slate-900/30">
+      <div className="flex-1 flex flex-col min-w-0 bg-slate-900/30 h-full overflow-hidden">
         {/* Chat Header */}
-        <div className="flex items-center justify-between py-4 px-6 border-b border-slate-700/50 bg-slate-900/50 backdrop-blur-sm">
+        <div className="flex items-center justify-between py-4 px-6 border-b border-slate-700/50 bg-slate-900/50 backdrop-blur-sm flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-primary-500/20 flex items-center justify-center">
               <Database className="w-5 h-5 text-primary-400" />
@@ -169,7 +174,7 @@ export default function ChatPage() {
         </div>
 
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="flex-1 overflow-y-auto px-6 py-4 flex-shrink-0 min-h-0">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="w-20 h-20 rounded-full bg-gradient-to-r from-primary-500/20 to-accent-500/20 flex items-center justify-center mb-6">
@@ -217,7 +222,7 @@ export default function ChatPage() {
         </div>
 
         {/* Input Area */}
-        <div className="p-4 border-t border-slate-700/50 bg-slate-900/80 backdrop-blur-sm">
+        <div className="p-4 border-t border-slate-700/50 bg-slate-900/80 backdrop-blur-sm flex-shrink-0">
           <div className="glass rounded-xl p-4">
             <div className="flex items-end gap-3">
               <textarea
@@ -319,10 +324,12 @@ function MessageBubble({ message }: { message: Message }) {
 // Content Block Renderer
 function ContentBlockRenderer({ block }: { block: ContentBlock }) {
   if (block.type === 'text') {
+    // 过滤思考内容
+    const filteredContent = filterThinkingContent(block.content);
     return (
       <div className="prose prose-invert prose-sm max-w-none text-slate-200 mb-3">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {block.content}
+          {filteredContent}
         </ReactMarkdown>
       </div>
     );
