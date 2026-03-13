@@ -27,7 +27,7 @@ export default function Layout({ children }: LayoutProps) {
     <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 overflow-hidden">
       {/* Header */}
       <header className="glass border-b border-slate-700/50 sticky top-0 z-50 flex-shrink-0">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             {/* Logo */}
             <Link to="/" className="flex items-center gap-3 group">
@@ -128,7 +128,7 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Footer */}
       <footer className="glass border-t border-slate-700/50 py-4">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between text-sm text-slate-500">
             <span>smartNum V3.0</span>
             <span>基于 DeepAgents 框架构建</span>
