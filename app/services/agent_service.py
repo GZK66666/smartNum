@@ -1,19 +1,28 @@
-"""DeepAgents 统一智能体服务 - v2.2 简化架构
+"""DeepAgents 统一智能体服务 - v3.0 生产环境重构
 
 核心设计原则：
 - 智能体专注于回答用户问题
 - 提供细粒度的 Schema 查询工具，实现渐进式上下文加载
-- 去除展示控制工具，让智能体自由输出
+- 使用 LangGraph checkpointer 实现状态持久化
+- 使用原生异步 API，避免线程与协程混合
+
+重构内容：
+- 工具定义使用 @tool 装饰器和 InjectedToolArg
+- 使用 session_id 作为 thread_id
+- 配置 checkpointer 和 store
+- 使用异步流式 API 替代 threading
 """
 
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Optional, List
 from dataclasses import dataclass, asdict
 import asyncio
 from contextvars import ContextVar
+
+from langchain_core.tools import tool
 
 from app.core import get_settings
 
@@ -241,9 +250,11 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询
 
 # ==================== 核心工具定义 ====================
 
-def list_tables(datasource_id: str) -> str:
-    """
-    列出数据库中所有表的名称和注释。
+@tool
+async def list_tables(
+    datasource_id: str,
+) -> str:
+    """列出数据库中所有表的名称和注释。
 
     在查询数据前，先调用此工具了解有哪些表可用。
     返回简洁的表列表，不包含列信息。
@@ -254,95 +265,91 @@ def list_tables(datasource_id: str) -> str:
     Returns:
         表名和注释列表（Markdown 格式）
     """
+    from app.services import db_service
 
-    async def _list_tables():
-        from app.services import db_service
+    # 从上下文获取数据库连接参数
+    ctx = get_db_context()
+    if ctx is None:
+        return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
 
-        # 从上下文获取数据库连接参数
-        ctx = get_db_context()
-        if ctx is None:
-            return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
+    # 获取简化的表信息（只包含表名和注释）
+    url = db_service.get_database_url(
+        ctx["db_type"],
+        ctx["host"],
+        ctx["port"],
+        ctx["database"],
+        ctx["username"],
+        ctx["password"],
+    )
 
-        # 获取简化的表信息（只包含表名和注释）
-        url = db_service.get_database_url(
-            ctx["db_type"],
-            ctx["host"],
-            ctx["port"],
-            ctx["database"],
-            ctx["username"],
-            ctx["password"],
-        )
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
 
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import create_async_engine
+    engine = create_async_engine(url, echo=False)
 
-        engine = create_async_engine(url, echo=False)
+    try:
+        async with engine.connect() as conn:
+            lines = ["# 数据库表列表\n"]
+            lines.append("| 序号 | 表名 | 说明 |")
+            lines.append("|------|------|------|")
 
-        try:
-            async with engine.connect() as conn:
-                lines = ["# 数据库表列表\n"]
-                lines.append("| 序号 | 表名 | 说明 |")
-                lines.append("|------|------|------|")
+            if ctx["db_type"] == "mysql":
+                result = await conn.execute(
+                    text("""
+                        SELECT TABLE_NAME, TABLE_COMMENT
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = :db
+                        ORDER BY TABLE_NAME
+                    """),
+                    {"db": ctx["database"]},
+                )
+                rows = result.fetchall()
 
-                if ctx["db_type"] == "mysql":
-                    result = await conn.execute(
-                        text("""
-                            SELECT TABLE_NAME, TABLE_COMMENT
-                            FROM information_schema.TABLES
-                            WHERE TABLE_SCHEMA = :db
-                            ORDER BY TABLE_NAME
-                        """),
-                        {"db": ctx["database"]},
-                    )
-                    rows = result.fetchall()
+                for i, row in enumerate(rows, 1):
+                    table_name = row[0]
+                    table_comment = row[1] or "-"
+                    lines.append(f"| {i} | {table_name} | {table_comment} |")
 
-                    for i, row in enumerate(rows, 1):
-                        table_name = row[0]
-                        table_comment = row[1] or "-"
-                        lines.append(f"| {i} | {table_name} | {table_comment} |")
+            elif ctx["db_type"] == "postgresql":
+                schema = ctx.get("schema_name") or "public"
+                result = await conn.execute(
+                    text("""
+                        SELECT table_name, obj_description((table_schema || '.' || table_name)::regclass) as table_comment
+                        FROM information_schema.tables
+                        WHERE table_schema = :schema AND table_type = 'BASE TABLE'
+                        ORDER BY table_name
+                    """),
+                    {"schema": schema},
+                )
+                rows = result.fetchall()
 
-                elif ctx["db_type"] == "postgresql":
-                    schema = ctx.get("schema_name") or "public"
-                    result = await conn.execute(
-                        text("""
-                            SELECT table_name, obj_description((table_schema || '.' || table_name)::regclass) as table_comment
-                            FROM information_schema.tables
-                            WHERE table_schema = :schema AND table_type = 'BASE TABLE'
-                            ORDER BY table_name
-                        """),
-                        {"schema": schema},
-                    )
-                    rows = result.fetchall()
+                for i, row in enumerate(rows, 1):
+                    table_name = row[0]
+                    table_comment = row[1] or "-"
+                    lines.append(f"| {i} | {table_name} | {table_comment} |")
 
-                    for i, row in enumerate(rows, 1):
-                        table_name = row[0]
-                        table_comment = row[1] or "-"
-                        lines.append(f"| {i} | {table_name} | {table_comment} |")
+            elif ctx["db_type"] == "sqlite":
+                result = await conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                )
+                rows = result.fetchall()
 
-                elif ctx["db_type"] == "sqlite":
-                    result = await conn.execute(
-                        text("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-                    )
-                    rows = result.fetchall()
+                for i, row in enumerate(rows, 1):
+                    table_name = row[0]
+                    lines.append(f"| {i} | {table_name} | - |")
 
-                    for i, row in enumerate(rows, 1):
-                        table_name = row[0]
-                        lines.append(f"| {i} | {table_name} | - |")
+            return "\n".join(lines)
 
-                return "\n".join(lines)
-
-        finally:
-            await engine.dispose()
-
-    return _run_async(_list_tables)
+    finally:
+        await engine.dispose()
 
 
-def get_table_schema(
+@tool
+async def get_table_schema(
     datasource_id: str,
     table_name: str,
 ) -> str:
-    """
-    获取指定表的详细结构信息。
+    """获取指定表的详细结构信息。
 
     当你需要了解某个表的列名、类型、注释等信息时调用此工具。
     建议只查询与用户问题相关的表，避免加载过多信息。
@@ -354,146 +361,142 @@ def get_table_schema(
     Returns:
         表结构信息（Markdown 格式），包含列名、类型、注释等
     """
+    from app.services import db_service
 
-    async def _get_table_schema():
-        from app.services import db_service
+    # 从上下文获取数据库连接参数
+    ctx = get_db_context()
+    if ctx is None:
+        return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
 
-        # 从上下文获取数据库连接参数
-        ctx = get_db_context()
-        if ctx is None:
-            return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
+    url = db_service.get_database_url(
+        ctx["db_type"],
+        ctx["host"],
+        ctx["port"],
+        ctx["database"],
+        ctx["username"],
+        ctx["password"],
+    )
 
-        url = db_service.get_database_url(
-            ctx["db_type"],
-            ctx["host"],
-            ctx["port"],
-            ctx["database"],
-            ctx["username"],
-            ctx["password"],
-        )
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
 
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import create_async_engine
+    engine = create_async_engine(url, echo=False)
 
-        engine = create_async_engine(url, echo=False)
+    try:
+        async with engine.connect() as conn:
+            lines = [f"# 表结构: {table_name}\n"]
 
-        try:
-            async with engine.connect() as conn:
-                lines = [f"# 表结构: {table_name}\n"]
+            if ctx["db_type"] == "mysql":
+                # 获取表注释
+                table_result = await conn.execute(
+                    text("""
+                        SELECT TABLE_COMMENT
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :table
+                    """),
+                    {"db": ctx["database"], "table": table_name},
+                )
+                table_row = table_result.fetchone()
+                if table_row and table_row[0]:
+                    lines.append(f"**表说明**: {table_row[0]}\n")
 
-                if ctx["db_type"] == "mysql":
-                    # 获取表注释
-                    table_result = await conn.execute(
-                        text("""
-                            SELECT TABLE_COMMENT
-                            FROM information_schema.TABLES
-                            WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :table
-                        """),
-                        {"db": ctx["database"], "table": table_name},
-                    )
-                    table_row = table_result.fetchone()
-                    if table_row and table_row[0]:
-                        lines.append(f"**表说明**: {table_row[0]}\n")
+                # 获取列信息
+                columns_result = await conn.execute(
+                    text("""
+                        SELECT
+                            COLUMN_NAME,
+                            COLUMN_TYPE,
+                            IS_NULLABLE,
+                            COLUMN_KEY,
+                            COLUMN_DEFAULT,
+                            COLUMN_COMMENT
+                        FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :table
+                        ORDER BY ORDINAL_POSITION
+                    """),
+                    {"db": ctx["database"], "table": table_name},
+                )
+                column_rows = columns_result.fetchall()
 
-                    # 获取列信息
-                    columns_result = await conn.execute(
-                        text("""
-                            SELECT
-                                COLUMN_NAME,
-                                COLUMN_TYPE,
-                                IS_NULLABLE,
-                                COLUMN_KEY,
-                                COLUMN_DEFAULT,
-                                COLUMN_COMMENT
-                            FROM information_schema.COLUMNS
-                            WHERE TABLE_SCHEMA = :db AND TABLE_NAME = :table
-                            ORDER BY ORDINAL_POSITION
-                        """),
-                        {"db": ctx["database"], "table": table_name},
-                    )
-                    column_rows = columns_result.fetchall()
+                lines.append("\n| 列名 | 类型 | 可空 | 键 | 默认值 | 说明 |")
+                lines.append("|------|------|------|-----|--------|------|")
 
-                    lines.append("\n| 列名 | 类型 | 可空 | 键 | 默认值 | 说明 |")
-                    lines.append("|------|------|------|-----|--------|------|")
+                for col in column_rows:
+                    col_name = col[0]
+                    col_type = col[1]
+                    nullable = "是" if col[2] == "YES" else "否"
+                    col_key = col[3] or "-"
+                    col_default = col[4] or "-"
+                    col_comment = col[5] or "-"
+                    lines.append(f"| {col_name} | {col_type} | {nullable} | {col_key} | {col_default} | {col_comment} |")
 
-                    for col in column_rows:
-                        col_name = col[0]
-                        col_type = col[1]
-                        nullable = "是" if col[2] == "YES" else "否"
-                        col_key = col[3] or "-"
-                        col_default = col[4] or "-"
-                        col_comment = col[5] or "-"
-                        lines.append(f"| {col_name} | {col_type} | {nullable} | {col_key} | {col_default} | {col_comment} |")
+            elif ctx["db_type"] == "postgresql":
+                schema = ctx.get("schema_name") or "public"
 
-                elif ctx["db_type"] == "postgresql":
-                    schema = ctx.get("schema_name") or "public"
+                # 获取列信息
+                columns_result = await conn.execute(
+                    text("""
+                        SELECT
+                            column_name,
+                            data_type || COALESCE('(' || character_maximum_length || ')', ''),
+                            is_nullable,
+                            NULL as column_key,
+                            column_default,
+                            col_description((table_schema || '.' || table_name)::regclass, ordinal_position)
+                        FROM information_schema.columns
+                        WHERE table_schema = :schema AND table_name = :table
+                        ORDER BY ordinal_position
+                    """),
+                    {"schema": schema, "table": table_name},
+                )
+                column_rows = columns_result.fetchall()
 
-                    # 获取列信息
-                    columns_result = await conn.execute(
-                        text("""
-                            SELECT
-                                column_name,
-                                data_type || COALESCE('(' || character_maximum_length || ')', ''),
-                                is_nullable,
-                                NULL as column_key,
-                                column_default,
-                                col_description((table_schema || '.' || table_name)::regclass, ordinal_position)
-                            FROM information_schema.columns
-                            WHERE table_schema = :schema AND table_name = :table
-                            ORDER BY ordinal_position
-                        """),
-                        {"schema": schema, "table": table_name},
-                    )
-                    column_rows = columns_result.fetchall()
+                lines.append("\n| 列名 | 类型 | 可空 | 键 | 默认值 | 说明 |")
+                lines.append("|------|------|------|-----|--------|------|")
 
-                    lines.append("\n| 列名 | 类型 | 可空 | 键 | 默认值 | 说明 |")
-                    lines.append("|------|------|------|-----|--------|------|")
+                for col in column_rows:
+                    col_name = col[0]
+                    col_type = col[1]
+                    nullable = "是" if col[2] == "YES" else "否"
+                    col_key = col[3] or "-"
+                    col_default = col[4] or "-"
+                    col_comment = col[5] or "-"
+                    lines.append(f"| {col_name} | {col_type} | {nullable} | {col_key} | {col_default} | {col_comment} |")
 
-                    for col in column_rows:
-                        col_name = col[0]
-                        col_type = col[1]
-                        nullable = "是" if col[2] == "YES" else "否"
-                        col_key = col[3] or "-"
-                        col_default = col[4] or "-"
-                        col_comment = col[5] or "-"
-                        lines.append(f"| {col_name} | {col_type} | {nullable} | {col_key} | {col_default} | {col_comment} |")
+            elif ctx["db_type"] == "sqlite":
+                # 获取表结构
+                pragma_result = await conn.execute(
+                    text(f"PRAGMA table_info({table_name})")
+                )
+                column_rows = pragma_result.fetchall()
 
-                elif ctx["db_type"] == "sqlite":
-                    # 获取表结构
-                    pragma_result = await conn.execute(
-                        text(f"PRAGMA table_info({table_name})")
-                    )
-                    column_rows = pragma_result.fetchall()
+                lines.append("\n| 列名 | 类型 | 可空 | 主键 | 默认值 |")
+                lines.append("|------|------|------|------|--------|")
 
-                    lines.append("\n| 列名 | 类型 | 可空 | 主键 | 默认值 |")
-                    lines.append("|------|------|------|------|--------|")
+                for col in column_rows:
+                    col_name = col[1]
+                    col_type = col[2] or "-"
+                    nullable = "否" if col[3] == 1 else "是"
+                    is_pk = "是" if col[5] == 1 else "否"
+                    col_default = col[4] or "-"
+                    lines.append(f"| {col_name} | {col_type} | {nullable} | {is_pk} | {col_default} |")
 
-                    for col in column_rows:
-                        col_name = col[1]
-                        col_type = col[2] or "-"
-                        nullable = "否" if col[3] == 1 else "是"
-                        is_pk = "是" if col[5] == 1 else "否"
-                        col_default = col[4] or "-"
-                        lines.append(f"| {col_name} | {col_type} | {nullable} | {is_pk} | {col_default} |")
+            return "\n".join(lines)
 
-                return "\n".join(lines)
+    except Exception as e:
+        return f"错误: 获取表结构失败 - {str(e)}"
 
-        except Exception as e:
-            return f"错误: 获取表结构失败 - {str(e)}"
-
-        finally:
-            await engine.dispose()
-
-    return _run_async(_get_table_schema)
+    finally:
+        await engine.dispose()
 
 
-def run_sql(
+@tool
+async def run_sql(
     datasource_id: str,
     sql: str,
     limit: int = 1000,
 ) -> dict:
-    """
-    执行 SQL 查询。
+    """执行 SQL 查询。
 
     Args:
         datasource_id: 数据源ID
@@ -503,30 +506,27 @@ def run_sql(
     Returns:
         查询结果，包含 success、columns、rows、total、truncated、error
     """
+    from app.services import db_service
 
-    async def _execute():
-        from app.services import db_service
+    # 从上下文获取数据库连接参数
+    ctx = get_db_context()
+    if ctx is None:
+        return {"success": False, "error": "未找到数据库连接上下文"}
 
-        # 从上下文获取数据库连接参数
-        ctx = get_db_context()
-        if ctx is None:
-            return {"success": False, "error": "未找到数据库连接上下文"}
-
-        result = await db_service.execute_query(
-            db_type=ctx["db_type"],
-            host=ctx["host"],
-            port=ctx["port"],
-            database=ctx["database"],
-            username=ctx["username"],
-            password=ctx["password"],
-            sql=sql,
-            max_rows=limit,
-        )
-        return result
-
-    return _run_async(_execute)
+    result = await db_service.execute_query(
+        db_type=ctx["db_type"],
+        host=ctx["host"],
+        port=ctx["port"],
+        database=ctx["database"],
+        username=ctx["username"],
+        password=ctx["password"],
+        sql=sql,
+        max_rows=limit,
+    )
+    return result
 
 
+@tool
 def render_chart(
     chart_type: str,
     title: str,
@@ -534,8 +534,7 @@ def render_chart(
     x_field: str = None,
     y_field: str = None,
 ) -> dict:
-    """
-    生成 ECharts 图表配置。
+    """生成 ECharts 图表配置。
 
     当用户要求可视化时调用此工具。智能体根据查询结果选择合适的图表类型，
     并指定数据字段映射，工具会生成完整的 ECharts 配置选项。
@@ -652,13 +651,13 @@ def render_chart(
     return {"chart_type": chart_type, "title": title, "option": option}
 
 
-def export_data(
+@tool
+async def export_data(
     filename: str,
     data: list,
     format: str = "csv",
 ) -> dict:
-    """
-    导出数据为文件。
+    """导出数据为文件。
 
     当用户要求导出表格数据时调用此工具。智能体根据查询结果生成文件，
     工具会返回文件信息和下载标识，前端可通过 download_id 下载文件。
@@ -694,8 +693,6 @@ def export_data(
     """
     import csv
     import io
-    import uuid
-    from datetime import datetime
 
     if not data:
         return {"error": "没有可导出的数据"}
@@ -761,13 +758,14 @@ def export_data(
     # 计算文件大小（KB）
     size_kb = round(len(content) / 1024, 2)
 
-    # 存储到临时缓存（使用 asyncio 全局存储）
-    _export_cache[download_id] = {
-        "content": content,
-        "filename": f"{filename}.{file_extension}",
-        "mime_type": mime_type,
-        "created_at": datetime.now(),
-    }
+    # 持久化到数据库
+    await _save_export_file(
+        download_id=download_id,
+        filename=f"{filename}.{file_extension}",
+        content=content,
+        mime_type=mime_type,
+        size_kb=size_kb,
+    )
 
     return {
         "download_id": download_id,
@@ -779,57 +777,118 @@ def export_data(
     }
 
 
-# 导出文件临时缓存（download_id -> file content）
-_export_cache: dict = {}
+# ==================== 导出文件持久化 ====================
 
-
-def get_export_file(download_id: str) -> dict | None:
-    """根据 download_id 获取文件内容"""
-    return _export_cache.get(download_id)
-
-
-def _run_async(coro_func):
-    """辅助函数：在同步上下文中运行异步函数
+async def _save_export_file(
+    download_id: str,
+    filename: str,
+    content: bytes,
+    mime_type: str,
+    size_kb: int,
+    expires_hours: int = 24,
+) -> None:
+    """保存导出文件到数据库
 
     Args:
-        coro_func: 一个无参数的异步函数，返回协程
+        download_id: 下载 ID
+        filename: 文件名
+        content: 文件内容
+        mime_type: MIME 类型
+        size_kb: 文件大小（KB）
+        expires_hours: 过期时间（小时）
     """
-    try:
-        # 尝试获取当前运行中的事件循环
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    from app.models.database import async_session_maker
+    from app.models.models import ExportFile
 
-    if loop is not None:
-        # 已有运行中的事件循环，需要在新线程中运行
-        import concurrent.futures
-        from contextvars import copy_context
+    async with async_session_maker() as session:
+        export_file = ExportFile(
+            id=download_id,
+            filename=filename,
+            content=content,
+            mime_type=mime_type,
+            size_kb=size_kb,
+            created_at=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(hours=expires_hours),
+        )
+        session.add(export_file)
+        await session.commit()
 
-        # 获取当前上下文（包含 ContextVar 值）
-        ctx = copy_context()
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # 在新线程中运行时，使用当前上下文
-            future = executor.submit(ctx.run, asyncio.run, coro_func())
-            return future.result()
-    else:
-        # 没有运行中的事件循环，直接运行
-        return asyncio.run(coro_func())
+async def get_export_file(download_id: str) -> dict | None:
+    """根据 download_id 获取文件内容
+
+    Args:
+        download_id: 下载 ID
+
+    Returns:
+        文件信息字典，包含 content、filename、mime_type 等
+    """
+    from app.models.database import async_session_maker
+    from app.models.models import ExportFile
+    from sqlalchemy import select
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ExportFile).where(ExportFile.id == download_id)
+        )
+        export_file = result.scalar_one_or_none()
+
+        if export_file is None:
+            return None
+
+        # 检查是否过期
+        if export_file.expires_at < datetime.utcnow():
+            await session.delete(export_file)
+            await session.commit()
+            return None
+
+        return {
+            "content": export_file.content,
+            "filename": export_file.filename,
+            "mime_type": export_file.mime_type,
+            "created_at": export_file.created_at,
+        }
+
+
+async def cleanup_expired_export_files() -> int:
+    """清理过期的导出文件
+
+    Returns:
+        删除的文件数量
+    """
+    from app.models.database import async_session_maker
+    from app.models.models import ExportFile
+    from sqlalchemy import delete
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            delete(ExportFile).where(ExportFile.expires_at < datetime.utcnow())
+        )
+        await session.commit()
+        return result.rowcount
 
 
 # ==================== DeepAgent 创建 ====================
 
 _agent = None
+_checkpointer = None
+_store = None
 
 
-def get_agent():
-    """获取 DeepAgent 单例"""
-    global _agent
+async def get_agent():
+    """获取 DeepAgent 实例（带状态持久化）"""
+    global _agent, _checkpointer, _store
+
     if _agent is not None:
         return _agent
 
     from deepagents import create_deep_agent
     from langchain_openai import ChatOpenAI
+    from app.services.checkpointer import get_checkpointer, get_store
+
+    # 获取 checkpointer 和 store
+    _checkpointer = await get_checkpointer()
+    _store = get_store()
 
     # 创建 OpenAI 兼容的 LLM
     llm = ChatOpenAI(
@@ -838,15 +897,17 @@ def get_agent():
         base_url=settings.llm_base_url,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
-        request_timeout=settings.llm_timeout,  # 添加超时设置
+        request_timeout=settings.llm_timeout,
     )
 
-    # 创建智能体 - 使用简化的工具集
+    # 创建智能体 - 添加 checkpointer 和 store
     _agent = create_deep_agent(
         name="smartnum-agent",
         model=llm,
         tools=[list_tables, get_table_schema, run_sql, render_chart, export_data],
         system_prompt=SYSTEM_PROMPT,
+        checkpointer=_checkpointer,
+        store=_store,
     )
 
     return _agent
@@ -861,13 +922,15 @@ def generate_session_title(user_message: str) -> str:
     """
     # 直接用户户问题作为标题，限制长度
     title = user_message.strip()
-    
+
     # 限制长度（最多 50 个字符）
     if len(title) > 50:
-        title = title[:50] + "..."    
-    
+        title = title[:50] + "..."
+
     return title
 
+
+# ==================== 流式处理 ====================
 
 async def process_query_stream(
     datasource_id: str,
@@ -881,8 +944,13 @@ async def process_query_stream(
     query: str,
     context: dict,
     history: list[dict],
+    session_id: str = None,  # 新增：使用 session_id 作为 thread_id
 ) -> AsyncGenerator[dict, None]:
-    """流式处理用户查询 - v2.2 简化架构"""
+    """流式处理用户查询 - v3.0 生产环境重构
+
+    使用 session_id 作为 thread_id，实现状态持久化。
+    使用原生异步流式 API，避免线程与协程混合。
+    """
 
     import logging
     logger = logging.getLogger("agent_service")
@@ -910,14 +978,18 @@ async def process_query_stream(
     # 发送思考事件
     yield ThinkingEvent(content="正在分析您的问题...").to_dict()
 
-    # 使用 DeepAgent 流式处理
-    agent = get_agent()
+    # 获取 Agent 实例
+    agent = await get_agent()
     log_step("获取Agent实例", "成功")
 
-    # 使用唯一的 thread_id
-    thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-    log_step("创建会话", f"thread_id: {thread_id[:8]}...")
+    # 使用 session_id 作为 thread_id（如果未提供则生成新的）
+    thread_id = session_id or str(uuid.uuid4())
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        },
+    }
+    log_step("创建会话", f"thread_id: {thread_id[:8]}... (session_id: {session_id})")
 
     # 构建消息
     messages = []
@@ -951,57 +1023,9 @@ async def process_query_stream(
         "error": None,
     }
 
-    # 使用队列在线程间传递数据
-    import queue
-    import threading
-    from contextvars import copy_context
-
-    chunk_queue = queue.Queue()
-    producer_done = threading.Event()
-    producer_error = [None]
-
-    # 捕获当前的上下文（包含 db_context）
-    current_ctx = copy_context()
-
-    def produce_chunks():
-        """生产者：在线程中运行 agent.stream()"""
-        try:
-            print("[Agent] 生产者线程：开始调用 agent.stream()")
-            stream_gen = agent.stream({"messages": messages}, config=config)
-            print("[Agent] 生产者线程：agent.stream() 返回，开始迭代")
-            for chunk in stream_gen:
-                print(f"[Agent] 生产者线程：获取到 chunk，类型={type(chunk)}")
-                chunk_queue.put(chunk)
-            print("[Agent] 生产者线程：stream 迭代完成")
-        except Exception as e:
-            print(f"[Agent] 生产者线程：异常：{e}")
-            producer_error[0] = e
-        finally:
-            print("[Agent] 生产者线程：设置完成标志")
-            producer_done.set()
-
-    # 启动生产者线程，并使用复制的上下文运行
-    producer_thread = threading.Thread(
-        target=lambda: current_ctx.run(produce_chunks),
-        daemon=True
-    )
-    producer_thread.start()
-
     try:
-        # 消费者：从队列取出 chunk 并 yield
-        while True:
-            # 检查是否完成
-            if producer_done.is_set() and chunk_queue.empty():
-                break
-
-            # 尝试获取 chunk
-            try:
-                chunk = chunk_queue.get(timeout=0.5)
-            except queue.Empty:
-                if producer_error[0]:
-                    raise producer_error[0]
-                continue
-
+        # 使用原生异步流式 API
+        async for chunk in agent.astream({"messages": messages}, config=config):
             event = _parse_agent_chunk(chunk)
 
             if event:
@@ -1029,7 +1053,6 @@ async def process_query_stream(
                         final_result["sql"] = sql
 
                 yield event.to_dict()
-                await asyncio.sleep(0)
 
         log_step("处理完成", f"总步骤数：{step_counter}")
         # 发送完成事件
@@ -1102,8 +1125,16 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
                         return None
 
                     # 普通 AI 消息
-                    if content and isinstance(content, str) and content.strip():
-                        return MessageEvent(content=content)
+                    # content 可能是字符串或字符串列表
+                    if content:
+                        if isinstance(content, list):
+                            # 流式内容可能是字符串列表
+                            content_str = "".join(str(c) if isinstance(c, str) else "" for c in content)
+                        else:
+                            content_str = str(content)
+
+                        if content_str.strip():
+                            return MessageEvent(content=content_str)
 
                 # 处理字典格式的消息
                 elif isinstance(last_msg, dict):
@@ -1133,8 +1164,15 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
                     if msg_type == "human":
                         return None
 
-                    if msg_content and isinstance(msg_content, str) and msg_content.strip():
-                        return MessageEvent(content=msg_content)
+                    # 处理消息内容（可能是字符串或列表）
+                    if msg_content:
+                        if isinstance(msg_content, list):
+                            content_str = "".join(str(c) if isinstance(c, str) else "" for c in msg_content)
+                        else:
+                            content_str = str(msg_content)
+
+                        if content_str.strip():
+                            return MessageEvent(content=content_str)
 
     # 处理 todos 事件
     if "todos" in chunk:
@@ -1157,13 +1195,14 @@ async def process_query(
     query: str,
     context: dict,
     history: list[dict],
+    session_id: str = None,
 ) -> dict:
     """非流式处理用户查询（兼容性接口）"""
     result = None
 
     async for event in process_query_stream(
         datasource_id, db_type, host, port, database,
-        username, password, schema_name, query, context, history
+        username, password, schema_name, query, context, history, session_id
     ):
         if event.get("type") == "message":
             result = {"content": event.get("content")}

@@ -1,7 +1,7 @@
 """SQLAlchemy ORM 模型"""
 
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey, Index, event
+from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey, Index, event, LargeBinary
 from sqlalchemy.dialects.mysql import VARCHAR, LONGTEXT
 from sqlalchemy.orm import relationship
 
@@ -117,3 +117,23 @@ class Message(Base):
 
     def __repr__(self):
         return f"<Message(id={self.id}, role={self.role}, session_id={self.session_id})>"
+
+
+class ExportFile(Base):
+    """导出文件模型 - 用于持久化导出文件"""
+    __tablename__ = "export_files"
+
+    id = Column(VARCHAR(36), primary_key=True, comment="导出文件 ID (UUID)")
+    filename = Column(VARCHAR(255), nullable=False, comment="文件名")
+    content = Column(LargeBinary, nullable=False, comment="文件内容")
+    mime_type = Column(VARCHAR(100), nullable=False, comment="MIME 类型")
+    size_kb = Column(Integer, nullable=False, comment="文件大小 (KB)")
+    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
+    expires_at = Column(DateTime, nullable=False, comment="过期时间")
+
+    __table_args__ = (
+        Index("idx_expires_at", "expires_at"),
+    )
+
+    def __repr__(self):
+        return f"<ExportFile(id={self.id}, filename={self.filename})>"

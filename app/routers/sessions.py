@@ -393,7 +393,7 @@ async def download_export_file(download_id: str):
     """下载导出文件"""
     from app.services.agent_service import get_export_file
 
-    file_info = get_export_file(download_id)
+    file_info = await get_export_file(download_id)
     if file_info is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

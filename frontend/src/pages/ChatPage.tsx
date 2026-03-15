@@ -220,8 +220,9 @@ export default function ChatPage() {
     // 开始流式请求
     createAgentMessageStream(targetSessionId!, userMessage, {
       onContent: (content) => {
-        streamingContentRef.current += content
-        setStreamingContent(streamingContentRef.current)
+        // 后端返回的是完整消息，直接替换而不是追加
+        streamingContentRef.current = content
+        setStreamingContent(content)
       },
       onStep: (event: AgentStepEvent) => {
         // 过滤掉 thinking 事件

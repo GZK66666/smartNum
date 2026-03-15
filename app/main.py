@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core import get_settings
 from app.models.database import init_db, close_db
 from app.routers import datasources, sessions, auth
+from app.services.checkpointer import init_checkpointer, close_checkpointer
 
 settings = get_settings()
 
@@ -28,10 +29,18 @@ async def lifespan(app: FastAPI):
         print(f"❌ 数据库初始化失败：{e}")
         raise
 
+    # 初始化 Checkpointer
+    try:
+        await init_checkpointer()
+        print("✅ Checkpointer 初始化完成")
+    except Exception as e:
+        print(f"⚠️ Checkpointer 初始化失败（将使用内存模式）：{e}")
+
     yield
 
     # 关闭时
     print("👋 SmartNum 服务关闭")
+    await close_checkpointer()
     await close_db()
 
 

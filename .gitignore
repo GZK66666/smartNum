@@ -47,3 +47,12 @@ Thumbs.db
 
 # claude
 *claude*
+
+# Claude Code CLI 相关文件
+.agents/
+.trae/
+.codebuddy/
+skills-lock.json
+
+# Checkpointer 数据目录
+data/

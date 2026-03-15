@@ -15,6 +15,7 @@ DEFAULT COLLATE utf8mb4_unicode_ci;
 USE smartnum;
 
 -- 删除现有表（禁用外键检查后）
+DROP TABLE IF EXISTS export_files;
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS datasources;
@@ -106,6 +107,21 @@ CREATE TABLE messages (
     CONSTRAINT fk_messages_session
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消息表';
+
+-- ============================================================
+-- 导出文件表
+-- ============================================================
+DROP TABLE IF EXISTS export_files;
+CREATE TABLE export_files (
+    id VARCHAR(36) PRIMARY KEY COMMENT '导出文件 ID (UUID)',
+    filename VARCHAR(255) NOT NULL COMMENT '文件名',
+    content LONGBLOB NOT NULL COMMENT '文件内容',
+    mime_type VARCHAR(100) NOT NULL COMMENT 'MIME 类型',
+    size_kb INT NOT NULL COMMENT '文件大小 (KB)',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    expires_at DATETIME NOT NULL COMMENT '过期时间',
+    INDEX idx_expires_at (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='导出文件表';
 
 -- ============================================================
 -- 触发器：更新会话最后活跃时间 & 消息计数

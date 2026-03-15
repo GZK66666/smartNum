@@ -296,6 +296,7 @@ class SessionService:
             query=content,
             context={"last_sql": None},
             history=history_dicts,
+            session_id=session_id,  # 传递 session_id 作为 thread_id
         ):
             event_count += 1
             event_type = event.get("type", "message")
