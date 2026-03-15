@@ -175,10 +175,11 @@ class SessionService:
         if not session:
             return []
 
+        # 使用 created_at 和 id 作为排序键，确保顺序稳定
         result = await self.db.execute(
             select(Message)
             .where(Message.session_id == session_id)
-            .order_by(desc(Message.created_at))
+            .order_by(desc(Message.created_at), desc(Message.id))
             .limit(limit)
         )
         messages = list(result.scalars().all())
@@ -193,6 +194,7 @@ class SessionService:
         sql: Optional[str] = None,
         result: Optional[dict] = None,
         result_truncated: bool = False,
+        agent_steps: Optional[list] = None,
     ) -> Message:
         """添加消息"""
         session = await self.get_session(session_id)
@@ -208,6 +210,11 @@ class SessionService:
                 result_json = result_json[:1024 * 1024 - 100] + '...[truncated]'
                 result_truncated = True
 
+        # 序列化 agent_steps
+        agent_steps_json = None
+        if agent_steps:
+            agent_steps_json = json.dumps(agent_steps, ensure_ascii=False, default=str)
+
         message = Message(
             id=str(uuid.uuid4()),
             session_id=session_id,
@@ -216,6 +223,7 @@ class SessionService:
             sql=sql,
             result=result_json,
             result_truncated=1 if result_truncated else 0,
+            agent_steps=agent_steps_json,
             created_at=datetime.utcnow(),
         )
 
@@ -265,6 +273,7 @@ class SessionService:
         # 流式处理
         result_data = None
         event_count = 0
+        collected_steps = []  # 收集智能体执行步骤
 
         async for event in process_query_stream(
             datasource_id=datasource.id,
@@ -286,6 +295,19 @@ class SessionService:
             if event_type == "done":
                 result_data = event.get("data")
 
+            # 收集步骤（排除 thinking 和 done 类型）
+            if event_type not in ("thinking", "done", "error"):
+                # 标记步骤状态
+                step_data = event.copy()
+                if event_type == "tool_result":
+                    step_data["status"] = "completed"
+                elif event_type in ("sql_generation", "sql_execution"):
+                    step_data["status"] = "completed" if event.get("status") == "completed" else "running"
+                else:
+                    step_data["status"] = event.get("status", "running")
+
+                collected_steps.append(step_data)
+
             # 发送 SSE 事件
             event_json = json.dumps(event, ensure_ascii=False)
             sse_message = f"event: {event_type}\ndata: {event_json}\n\n"
@@ -299,7 +321,7 @@ class SessionService:
 
         print(f"[SSE] 流结束，共发送 {event_count} 个事件")
 
-        # 添加助手消息
+        # 添加助手消息（包含 agent_steps）
         if result_data:
             await self.add_message(
                 session_id=session_id,
@@ -307,6 +329,7 @@ class SessionService:
                 content=result_data.get("content", ""),
                 sql=result_data.get("sql"),
                 result=result_data,
+                agent_steps=collected_steps if collected_steps else None,
             )
 
         # 如果是第一条消息，自动生成标题

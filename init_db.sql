@@ -98,6 +98,7 @@ CREATE TABLE messages (
     `sql` TEXT COMMENT '生成的 SQL 语句',
     result LONGTEXT COMMENT '查询结果 (JSON)',
     result_truncated TINYINT DEFAULT 0 COMMENT '结果是否截断：1-是 0-否',
+    agent_steps LONGTEXT COMMENT '智能体执行步骤 (JSON)',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     INDEX idx_session_id (session_id),
     INDEX idx_role (role),

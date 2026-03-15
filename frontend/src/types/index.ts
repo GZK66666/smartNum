@@ -1,166 +1,132 @@
-// 数据源相关类型
-export type DatabaseType = 'mysql' | 'postgresql' | 'sqlite';
-
-export interface DataSourceConfig {
-  name: string;
-  type: DatabaseType;
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  password: string;
-  schema_name?: string;
+// API Types
+export interface ApiResponse<T = unknown> {
+  code: number
+  data?: T
+  message?: string
+  next_cursor?: string
+  has_more?: boolean
 }
 
-export interface DataSource extends DataSourceConfig {
-  id: string;
-  status: 'connected' | 'disconnected' | 'error';
-  created_at: string;
+// Auth Types
+export interface User {
+  user_id: string
+  username: string
+  email: string | null
+  status: number
 }
 
-export interface ColumnInfo {
-  name: string;
-  type: string;
-  nullable: boolean;
-  key?: string;
-  comment?: string;
+export interface AuthResponse {
+  user_id: string
+  username: string
+  email: string | null
+  access_token: string
+  token_type: string
+}
+
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
+export interface RegisterRequest {
+  username: string
+  password: string
+  email?: string
+}
+
+// DataSource Types
+export interface DataSource {
+  id: string
+  name: string
+  type: string
+  host: string
+  port: number
+  database: string
+  status: string
+  created_at: string
+}
+
+export interface DataSourceCreate {
+  name: string
+  type: 'mysql' | 'postgresql' | 'sqlite'
+  host: string
+  port: number
+  database: string
+  username: string
+  password: string
+  schema_name?: string
 }
 
 export interface TableInfo {
-  name: string;
-  comment?: string;
-  columns: ColumnInfo[];
+  name: string
+  comment?: string
+  columns: ColumnInfo[]
+  primary_keys: string[]
 }
 
-export interface SchemaInfo {
-  tables: TableInfo[];
+export interface ColumnInfo {
+  name: string
+  type: string
+  nullable: boolean
+  key?: string
+  comment?: string
 }
 
-// 会话相关类型
+// Session Types
 export interface Session {
-  session_id: string;
-  datasource_id: string;
-  created_at: string;
+  id: string
+  datasource_id: string
+  datasource_name: string
+  title: string | null
+  message_count: number
+  created_at: string
+  last_active_at: string
 }
 
-// 会话列表项（用于侧边栏展示）
-export interface SessionListItem {
-  id: string;
-  session_id?: string;  // 兼容后端返回
-  datasource_id: string;
-  datasource_name: string;
-  title: string | null;
-  message_count?: number;
-  created_at: string;
-  last_active_at: string;
+export interface SessionCreate {
+  datasource_id: string
 }
 
-// 会话列表响应（无限滚动）
-export interface SessionsResponse {
-  code: number;
-  data: SessionListItem[];
-  next_cursor?: string | null;
-  has_more: boolean;
+// Message Types
+export interface Message {
+  id: string
+  role: 'user' | 'assistant'
+  blocks: MessageBlock[]
+  sql?: string
+  result?: QueryResult
+  agentSteps?: AgentStep[]
+  created_at: string
+}
+
+export interface MessageBlock {
+  type: 'text' | 'code'
+  content: string
+  language?: string
 }
 
 export interface QueryResult {
-  columns: string[];
-  rows: (string | number | null)[][];
-  total: number;
-  truncated: boolean;
+  columns: string[]
+  rows: unknown[][]
+  total: number
+  truncated: boolean
+  execution_time?: number
 }
 
-// ==================== v2.2 简化内容块类型 ====================
-
-// 内容块类型 - 支持文本、图表和导出
-export type ContentBlock =
-  | { type: 'text'; content: string }
-  | { type: 'chart'; chartType: string; title: string; option: Record<string, unknown> }
-  | { type: 'export'; filename: string; format: string; size: number; downloadId: string; rowCount: number; columnCount: number };
-
-// 消息类型 - 使用内容块
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  blocks: ContentBlock[];
-  sql?: string;  // 保留用于调试
-  thinking_process?: ThinkingEvent[];
-  created_at: string;
-  error?: string;
+export interface MessageCreate {
+  content: string
 }
 
-// API 响应类型
-export interface ApiResponse<T> {
-  code: number;
-  data?: T;
-  message?: string;
-  details?: Record<string, unknown>;
+// SSE Event Types
+export interface SSEMessage {
+  type: 'content' | 'sql' | 'result' | 'thinking' | 'error' | 'done'
+  content?: string
+  sql?: string
+  result?: QueryResult
+  error?: string
 }
 
-// 错误类型
-export interface ApiError {
-  code: number;
-  message: string;
-  details?: Record<string, unknown>;
-}
-
-// SSE 事件类型 (v1.0)
-export type SSEEventType = 'thinking' | 'sql' | 'result' | 'done' | 'error';
-
-export interface SSEEvent {
-  event: SSEEventType;
-  data: {
-    status?: string;
-    message?: string;
-    sql?: string;
-    columns?: string[];
-    rows?: (string | number | null)[][];
-    error?: string;
-  };
-}
-
-// ==================== v1.1 兼容类型 ====================
-
-// 图表类型
-export type ChartType = 'line' | 'bar' | 'pie' | 'scatter' | 'histogram' | 'area';
-
-// 坐标轴类型
-export type AxisType = 'category' | 'datetime' | 'number';
-
-// 坐标轴配置
-export interface AxisConfig {
-  field: string;
-  label: string;
-  type: AxisType;
-}
-
-// 系列配置
-export interface SeriesConfig {
-  name: string;
-  field: string;
-  type: string;
-}
-
-// 图表选项
-export interface ChartOptions {
-  show_legend: boolean;
-  show_data_labels: boolean;
-  stacked: boolean;
-}
-
-// 可视化建议
-export interface ChartSuggestion {
-  chart_type: ChartType;
-  title: string;
-  x_axis: AxisConfig;
-  y_axis: AxisConfig;
-  series?: SeriesConfig[];
-  options?: ChartOptions;
-  confidence: number;
-}
-
-// 思考过程事件类型 (v2.2)
-export type ThinkingEventType =
+// Agent Step Event Types (from backend agent_service.py)
+export type AgentEventType =
   | 'thinking'
   | 'tool_call'
   | 'tool_result'
@@ -168,61 +134,38 @@ export type ThinkingEventType =
   | 'sql_execution'
   | 'message'
   | 'error'
-  | 'done';
+  | 'done'
 
-// 思考过程事件
-export interface ThinkingEvent {
-  type: ThinkingEventType;
-  content?: string;
-  tool?: string;
-  input?: Record<string, unknown>;
-  output?: string;
-  id?: string;
-  sql?: string;
-  status?: string;
-  message?: string;
-  error?: string;
+export interface AgentStepEvent {
+  type: AgentEventType
+  step_id?: string
+  name?: string  // 后端提供的显示名称
+  content?: string
+  status?: 'pending' | 'running' | 'completed' | 'error'
+  details?: string
+  timestamp?: string
+  sql?: string
+  result?: QueryResult
+  error?: string
+  // 工具调用相关
+  tool?: string
+  input?: Record<string, unknown>
+  output?: string
+  id?: string
 }
 
-// 分析洞察
-export interface Insight {
-  title: string;
-  content: string;
-  importance: 'high' | 'medium' | 'low';
-}
-
-// 分析结果
-export interface AnalysisResult {
-  insights: Insight[];
-  recommendations: string[];
-  data_used: string[];
-}
-
-// ==================== V3.0 用户认证类型 ====================
-
-export interface User {
-  user_id: string;
-  username: string;
-  email: string | null;
-  status: number;
-  created_at?: string;
-}
-
-export interface LoginRequest {
-  username: string;
-  password: string;
-}
-
-export interface RegisterRequest {
-  username: string;
-  password: string;
-  email?: string | null;
-}
-
-export interface AuthResponse {
-  user_id: string;
-  username: string;
-  email: string | null;
-  access_token: string;
-  token_type: string;
+export interface AgentStep {
+  id: string
+  type: AgentEventType
+  name: string
+  status: 'pending' | 'running' | 'completed' | 'error'
+  content?: string
+  details?: string
+  sql?: string
+  result?: QueryResult
+  tool?: string
+  timestamp: number
+  // 后端存储的原始字段
+  input?: Record<string, unknown> | string
+  output?: string
 }

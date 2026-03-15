@@ -1,282 +1,353 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAppStore } from '@/store';
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
+import { motion } from 'framer-motion'
 import {
-  Database,
   Loader2,
   CheckCircle2,
   XCircle,
-  ArrowLeft,
-  Server,
-} from 'lucide-react';
-import toast from 'react-hot-toast';
-import type { DatabaseType, DataSourceConfig } from '@/types';
+  ChevronRight,
+  ChevronLeft,
+} from 'lucide-react'
+import { datasourceApi } from '../services/api'
 
-const databaseTypes: { value: DatabaseType; label: string; defaultPort: number }[] = [
-  { value: 'mysql', label: 'MySQL', defaultPort: 3306 },
-  { value: 'postgresql', label: 'PostgreSQL', defaultPort: 5432 },
-  { value: 'sqlite', label: 'SQLite', defaultPort: 0 },
-];
+const DB_TYPES = [
+  { value: 'mysql', label: 'MySQL', icon: '🐬', color: 'from-blue-500 to-blue-600' },
+  { value: 'postgresql', label: 'PostgreSQL', icon: '🐘', color: 'from-indigo-500 to-indigo-600' },
+  { value: 'sqlite', label: 'SQLite', icon: '📦', color: 'from-gray-500 to-gray-600' },
+]
 
-const defaultConfig: DataSourceConfig = {
-  name: '',
-  type: 'mysql',
-  host: 'localhost',
-  port: 3306,
-  database: '',
-  username: '',
-  password: '',
-};
+const DEFAULT_PORTS: Record<string, number> = {
+  mysql: 3306,
+  postgresql: 5432,
+  sqlite: 0,
+}
 
 export default function NewDataSourcePage() {
-  const navigate = useNavigate();
-  const { addDataSource, testConnection } = useAppStore();
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [step, setStep] = useState(1)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [testResult, setTestResult] = useState<'idle' | 'success' | 'error'>('idle')
+  const [error, setError] = useState('')
 
-  const [config, setConfig] = useState<DataSourceConfig>(defaultConfig);
-  const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
+  const [form, setForm] = useState({
+    name: '',
+    type: 'mysql' as 'mysql' | 'postgresql' | 'sqlite',
+    host: 'localhost',
+    port: 3306,
+    database: '',
+    username: '',
+    password: '',
+    schema_name: '',
+  })
 
-  const handleTypeChange = (type: DatabaseType) => {
-    const dbType = databaseTypes.find(t => t.value === type);
-    setConfig(prev => ({
-      ...prev,
-      type,
-      port: dbType?.defaultPort || prev.port,
-    }));
-    setTestResult(null);
-  };
+  const updateForm = (updates: Partial<typeof form>) => {
+    setForm((prev) => ({ ...prev, ...updates }))
+  }
+
+  const handleTypeChange = (type: string) => {
+    updateForm({
+      type: type as typeof form.type,
+      port: DEFAULT_PORTS[type] || 0,
+    })
+  }
 
   const handleTest = async () => {
-    setIsTesting(true);
-    setTestResult(null);
-
+    setTestResult('idle')
+    setError('')
     try {
-      const result = await testConnection(config);
-      setTestResult(result);
-      if (result.success) {
-        toast.success('连接测试成功');
-      } else {
-        toast.error(result.message || '连接测试失败');
+      const result = await datasourceApi.test(form)
+      setTestResult(result.success ? 'success' : 'error')
+      if (!result.success) {
+        setError(result.message || '连接失败')
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '连接测试失败';
-      setTestResult({ success: false, message });
-      toast.error(message);
-    } finally {
-      setIsTesting(false);
+    } catch (err) {
+      setTestResult('error')
+      setError(err instanceof Error ? err.message : '连接失败')
     }
-  };
+  }
 
-  const handleSave = async () => {
-    if (!config.name.trim()) {
-      toast.error('请输入数据源名称');
-      return;
-    }
-    if (!testResult?.success) {
-      toast.error('请先测试连接');
-      return;
-    }
-
-    setIsSaving(true);
+  const handleSubmit = async () => {
+    setIsSubmitting(true)
+    setError('')
     try {
-      await addDataSource(config);
-      toast.success('数据源添加成功');
-      navigate('/');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '添加数据源失败';
-      toast.error(message);
+      await datasourceApi.create(form)
+      // 使数据源列表缓存失效，返回列表页时会重新获取
+      queryClient.invalidateQueries({ queryKey: ['datasources'] })
+      navigate('/datasources')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建失败')
     } finally {
-      setIsSaving(false);
+      setIsSubmitting(false)
     }
-  };
-
-  const isSQLite = config.type === 'sqlite';
+  }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-8">
+    <div className="p-8 max-w-2xl mx-auto">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="mb-8">
         <button
-          onClick={() => navigate('/')}
-          className="p-2 hover:bg-slate-800/50 rounded-lg transition-colors"
+          onClick={() => navigate('/datasources')}
+          className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-4"
         >
-          <ArrowLeft className="w-5 h-5 text-slate-400" />
+          <ChevronLeft className="w-4 h-4" />
+          返回
         </button>
-        <div>
-          <h2 className="text-2xl font-bold text-slate-100">添加数据源</h2>
-          <p className="text-slate-400 mt-1">配置新的数据库连接</p>
-        </div>
+        <motion.h1
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="font-display text-3xl font-bold text-white mb-2"
+        >
+          添加数据源
+        </motion.h1>
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.1 }}
+          className="text-gray-400"
+        >
+          连接您的数据库
+        </motion.p>
       </div>
 
-      {/* Form */}
-      <div className="card space-y-6">
-        {/* Database Type Selection */}
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-3">
-            数据库类型
-          </label>
-          <div className="grid grid-cols-3 gap-3">
-            {databaseTypes.map((db) => (
-              <button
-                key={db.value}
-                type="button"
-                onClick={() => handleTypeChange(db.value)}
-                className={`p-4 rounded-lg border transition-all duration-200 ${
-                  config.type === db.value
-                    ? 'border-primary-500 bg-primary-500/10'
-                    : 'border-slate-700 hover:border-slate-600'
-                }`}
-              >
-                <Database className={`w-6 h-6 mx-auto mb-2 ${
-                  config.type === db.value ? 'text-primary-400' : 'text-slate-500'
-                }`} />
-                <span className={`text-sm font-medium ${
-                  config.type === db.value ? 'text-primary-400' : 'text-slate-400'
-                }`}>
-                  {db.label}
-                </span>
-              </button>
-            ))}
+      {/* Progress Steps */}
+      <div className="flex items-center gap-4 mb-8">
+        {[1, 2].map((s) => (
+          <div key={s} className="flex items-center gap-2">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center font-medium text-sm transition-colors ${
+                step >= s
+                  ? 'bg-accent-primary text-dark-900'
+                  : 'bg-dark-600 text-gray-400'
+              }`}
+            >
+              {s}
+            </div>
+            <span className={step >= s ? 'text-white' : 'text-gray-500'}>
+              {s === 1 ? '选择类型' : '配置连接'}
+            </span>
+            {s < 2 && (
+              <div className={`w-12 h-0.5 ${step > s ? 'bg-accent-primary' : 'bg-dark-600'}`} />
+            )}
           </div>
-        </div>
+        ))}
+      </div>
 
-        {/* Name */}
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-2">
-            数据源名称 <span className="text-red-400">*</span>
-          </label>
-          <input
-            type="text"
-            value={config.name}
-            onChange={(e) => setConfig(prev => ({ ...prev, name: e.target.value }))}
-            placeholder="例如：生产数据库"
-            className="input-field"
-          />
-        </div>
+      {/* Step 1: Select Type */}
+      {step === 1 && (
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="space-y-6"
+        >
+          <div>
+            <label className="block text-gray-300 text-sm font-medium mb-3">
+              数据源名称
+            </label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => updateForm({ name: e.target.value })}
+              className="input-field"
+              placeholder="例如：生产环境数据库"
+            />
+          </div>
 
-        {/* Connection Details */}
-        {!isSQLite && (
-          <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-gray-300 text-sm font-medium mb-3">
+              数据库类型
+            </label>
+            <div className="grid grid-cols-3 gap-4">
+              {DB_TYPES.map((db) => (
+                <button
+                  key={db.value}
+                  onClick={() => handleTypeChange(db.value)}
+                  className={`p-4 rounded-xl border-2 transition-all ${
+                    form.type === db.value
+                      ? 'border-accent-primary bg-accent-primary/10'
+                      : 'border-white/5 hover:border-white/20'
+                  }`}
+                >
+                  <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${db.color} flex items-center justify-center mx-auto mb-3 text-2xl`}>
+                    {db.icon}
+                  </div>
+                  <span className="font-medium text-white">{db.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button
+            onClick={() => setStep(2)}
+            disabled={!form.name}
+            className="btn-primary w-full flex items-center justify-center gap-2"
+          >
+            下一步
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        </motion.div>
+      )}
+
+      {/* Step 2: Configure Connection */}
+      {step === 2 && (
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="space-y-5"
+        >
+          {error && (
+            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          {form.type !== 'sqlite' && (
+            <>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="col-span-2">
+                  <label className="block text-gray-300 text-sm font-medium mb-2">
+                    主机地址
+                  </label>
+                  <input
+                    type="text"
+                    value={form.host}
+                    onChange={(e) => updateForm({ host: e.target.value })}
+                    className="input-field"
+                    placeholder="localhost"
+                  />
+                </div>
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-2">
+                    端口
+                  </label>
+                  <input
+                    type="number"
+                    value={form.port}
+                    onChange={(e) => updateForm({ port: Number(e.target.value) })}
+                    className="input-field"
+                    placeholder="3306"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-gray-300 text-sm font-medium mb-2">
+                  数据库名称
+                </label>
+                <input
+                  type="text"
+                  value={form.database}
+                  onChange={(e) => updateForm({ database: e.target.value })}
+                  className="input-field"
+                  placeholder="my_database"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-2">
+                    用户名
+                  </label>
+                  <input
+                    type="text"
+                    value={form.username}
+                    onChange={(e) => updateForm({ username: e.target.value })}
+                    className="input-field"
+                    placeholder="root"
+                  />
+                </div>
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-2">
+                    密码
+                  </label>
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={(e) => updateForm({ password: e.target.value })}
+                    className="input-field"
+                    placeholder="••••••••"
+                  />
+                </div>
+              </div>
+
+              {form.type === 'postgresql' && (
+                <div>
+                  <label className="block text-gray-300 text-sm font-medium mb-2">
+                    Schema 名称
+                  </label>
+                  <input
+                    type="text"
+                    value={form.schema_name}
+                    onChange={(e) => updateForm({ schema_name: e.target.value })}
+                    className="input-field"
+                    placeholder="public"
+                  />
+                </div>
+              )}
+            </>
+          )}
+
+          {form.type === 'sqlite' && (
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                主机地址 <span className="text-red-400">*</span>
+              <label className="block text-gray-300 text-sm font-medium mb-2">
+                数据库文件路径
               </label>
               <input
                 type="text"
-                value={config.host}
-                onChange={(e) => setConfig(prev => ({ ...prev, host: e.target.value }))}
-                placeholder="localhost"
+                value={form.database}
+                onChange={(e) => updateForm({ database: e.target.value })}
                 className="input-field"
+                placeholder="/path/to/database.db"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                端口 <span className="text-red-400">*</span>
-              </label>
-              <input
-                type="number"
-                value={config.port}
-                onChange={(e) => setConfig(prev => ({ ...prev, port: parseInt(e.target.value) || 0 }))}
-                placeholder="3306"
-                className="input-field"
-              />
+          )}
+
+          {/* Test Result */}
+          {testResult !== 'idle' && (
+            <div
+              className={`p-3 rounded-xl flex items-center gap-3 ${
+                testResult === 'success'
+                  ? 'bg-green-500/10 border border-green-500/20'
+                  : 'bg-red-500/10 border border-red-500/20'
+              }`}
+            >
+              {testResult === 'success' ? (
+                <>
+                  <CheckCircle2 className="w-5 h-5 text-green-400" />
+                  <span className="text-green-400">连接成功</span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="w-5 h-5 text-red-400" />
+                  <span className="text-red-400">{error}</span>
+                </>
+              )}
             </div>
+          )}
+
+          <div className="flex gap-4">
+            <button onClick={() => setStep(1)} className="btn-secondary flex-1">
+              上一步
+            </button>
+            <button
+              onClick={handleTest}
+              disabled={!form.database || (form.type !== 'sqlite' && (!form.username || !form.password))}
+              className="btn-secondary flex-1"
+            >
+              测试连接
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={isSubmitting || testResult !== 'success'}
+              className="btn-primary flex-1 flex items-center justify-center gap-2"
+            >
+              {isSubmitting && <Loader2 className="w-5 h-5 animate-spin" />}
+              创建
+            </button>
           </div>
-        )}
-
-        {/* Database Name / File Path */}
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-2">
-            {isSQLite ? '数据库文件路径' : '数据库名称'} <span className="text-red-400">*</span>
-          </label>
-          <input
-            type="text"
-            value={config.database}
-            onChange={(e) => setConfig(prev => ({ ...prev, database: e.target.value }))}
-            placeholder={isSQLite ? '/path/to/database.db' : 'my_database'}
-            className="input-field"
-          />
-        </div>
-
-        {/* Credentials (not for SQLite) */}
-        {!isSQLite && (
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                用户名 <span className="text-red-400">*</span>
-              </label>
-              <input
-                type="text"
-                value={config.username}
-                onChange={(e) => setConfig(prev => ({ ...prev, username: e.target.value }))}
-                placeholder="root"
-                className="input-field"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                密码 <span className="text-red-400">*</span>
-              </label>
-              <input
-                type="password"
-                value={config.password}
-                onChange={(e) => setConfig(prev => ({ ...prev, password: e.target.value }))}
-                placeholder="••••••••"
-                className="input-field"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Test Result */}
-        {testResult && (
-          <div className={`flex items-center gap-3 p-4 rounded-lg ${
-            testResult.success
-              ? 'bg-green-500/10 border border-green-500/20'
-              : 'bg-red-500/10 border border-red-500/20'
-          }`}>
-            {testResult.success ? (
-              <CheckCircle2 className="w-5 h-5 text-green-400" />
-            ) : (
-              <XCircle className="w-5 h-5 text-red-400" />
-            )}
-            <div>
-              <p className={`font-medium ${
-                testResult.success ? 'text-green-400' : 'text-red-400'
-              }`}>
-                {testResult.message}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Actions */}
-        <div className="flex items-center justify-between pt-4 border-t border-slate-700">
-          <button
-            type="button"
-            onClick={handleTest}
-            disabled={isTesting}
-            className="btn-secondary flex items-center gap-2"
-          >
-            {isTesting ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Server className="w-4 h-4" />
-            )}
-            测试连接
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={isSaving || !testResult?.success}
-            className="btn-primary flex items-center gap-2"
-          >
-            {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-            保存数据源
-          </button>
-        </div>
-      </div>
+        </motion.div>
+      )}
     </div>
-  );
+  )
 }

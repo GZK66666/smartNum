@@ -215,6 +215,12 @@ async def get_messages(
                 msg_dict["result"] = json.loads(msg.result)
             except:
                 pass
+        if msg.agent_steps:
+            try:
+                import json
+                msg_dict["agentSteps"] = json.loads(msg.agent_steps)
+            except:
+                pass
         result.append(msg_dict)
 
     return {

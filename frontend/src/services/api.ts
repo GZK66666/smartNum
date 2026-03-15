@@ -1,359 +1,358 @@
-import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
-import type {
-  DataSource,
-  DataSourceConfig,
-  SchemaInfo,
-  Session,
-  SessionListItem,
-  SessionsResponse,
-  Message,
-  ApiResponse,
-  ThinkingEvent,
-  ContentBlock,
-  User,
-  LoginRequest,
-  RegisterRequest,
-  AuthResponse,
-} from '@/types';
+import type { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, User, AgentStepEvent } from '../types'
 
-const API_BASE = '/api';
-// SSE 流式请求直接访问后端，绕过 Vite 代理缓冲
-const SSE_API_BASE = 'http://localhost:8000/api';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
-class ApiService {
-  private client: AxiosInstance;
-  private authToken: string | null = null;
+class ApiError extends Error {
+  code: number
+  status: number
+  constructor(code: number, message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+    this.status = status
+  }
+}
 
-  constructor() {
-    this.client = axios.create({
-      baseURL: API_BASE,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+async function request<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const token = localStorage.getItem('token')
 
-    // 请求拦截器 - 自动添加 token
-    this.client.interceptors.request.use(
-      (config: InternalAxiosRequestConfig) => {
-        if (this.authToken) {
-          config.headers.Authorization = `Bearer ${this.authToken}`;
-        }
-        return config;
-      },
-      (error) => Promise.reject(error)
-    );
-
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (error.response) {
-          return Promise.reject(error.response.data);
-        } else if (error.request) {
-          return Promise.reject({
-            code: -1,
-            message: '无法连接到服务器，请检查网络连接',
-          });
-        }
-        return Promise.reject(error);
-      }
-    );
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+    ...(token && { Authorization: `Bearer ${token}` }),
+    ...options.headers,
   }
 
-  // 设置认证 token
-  setAuthToken(token: string | null) {
-    this.authToken = token;
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers,
+  })
+
+  const data = await response.json()
+
+  if (!response.ok) {
+    const error = data.detail || data
+    throw new ApiError(
+      error.code || response.status,
+      error.message || '请求失败',
+      response.status
+    )
   }
 
-  // ==================== 用户认证 ====================
+  return data
+}
 
-  async login(credentials: LoginRequest): Promise<AuthResponse> {
-    const response = await this.client.post<AuthResponse>('/auth/login', credentials);
-    return response.data;
-  }
-
-  async register(data: RegisterRequest): Promise<AuthResponse> {
-    const response = await this.client.post<AuthResponse>('/auth/register', data);
-    return response.data;
-  }
-
-  async getCurrentUser(): Promise<User> {
-    const response = await this.client.get<User>('/auth/me');
-    return response.data;
-  }
-
-  // ==================== 数据源管理 ====================
-
-  async getDataSources(): Promise<DataSource[]> {
-    const response = await this.client.get<ApiResponse<DataSource[]>>('/datasources');
-    return response.data.data || [];
-  }
-
-  async addDataSource(config: DataSourceConfig): Promise<DataSource> {
-    const response = await this.client.post<ApiResponse<DataSource>>('/datasources', config);
-    if (response.data.code !== 0) {
-      throw new Error(response.data.message || '添加数据源失败');
-    }
-    return response.data.data!;
-  }
-
-  async testDataSource(config: DataSourceConfig): Promise<{ success: boolean; message: string; version?: string }> {
-    const response = await this.client.post<ApiResponse<{ success: boolean; message: string; version?: string }>>(
-      '/datasources/test',
-      config
-    );
-    return response.data.data!;
-  }
-
-  async deleteDataSource(id: string): Promise<void> {
-    await this.client.delete(`/datasources/${id}`);
-  }
-
-  async getDataSourceSchema(id: string): Promise<SchemaInfo> {
-    const response = await this.client.get<ApiResponse<SchemaInfo>>(`/datasources/${id}/schema`);
-    return response.data.data!;
-  }
-
-  // ==================== 会话管理 ====================
-
-  async createSession(datasourceId: string): Promise<Session> {
-    const response = await this.client.post<ApiResponse<Session>>('/sessions', {
-      datasource_id: datasourceId,
-    });
-    return response.data.data!;
-  }
-
-  async deleteSession(sessionId: string): Promise<void> {
-    await this.client.delete(`/sessions/${sessionId}`);
-  }
-
-  async getSessionMessages(sessionId: string, limit = 20): Promise<Message[]> {
-    const response = await this.client.get<ApiResponse<{ messages: Message[] }>>(
-      `/sessions/${sessionId}/messages`,
-      { params: { limit } }
-    );
-    return response.data.data?.messages || [];
-  }
-
-  // ==================== 会话列表管理 ====================
-
-  async getSessions(params?: { cursor?: string; limit?: number; datasource_id?: string }): Promise<{
-    sessions: SessionListItem[];
-    next_cursor?: string | null;
-    has_more: boolean;
-  }> {
-    const response = await this.client.get<ApiResponse<SessionListItem[]>>('/sessions', {
-      params: params || {}
-    });
-    // 兼容旧版本响应格式
-    const data = response.data as unknown as SessionsResponse | ApiResponse<SessionListItem[]>;
-    if ('next_cursor' in data) {
-      return {
-        sessions: data.data || [],
-        next_cursor: data.next_cursor,
-        has_more: data.has_more,
-      };
-    }
-    return {
-      sessions: data.data || [],
-      next_cursor: null,
-      has_more: false,
-    };
-  }
-
-  async renameSession(sessionId: string, title: string): Promise<void> {
-    await this.client.patch(`/sessions/${sessionId}`, { title });
-  }
-
-  async sendMessage(sessionId: string, content: string): Promise<Message> {
-    const response = await this.client.post<ApiResponse<Message>>(
-      `/sessions/${sessionId}/messages`,
-      { content }
-    );
-    return response.data.data!;
-  }
-
-  /** 发送消息 (流式 SSE) - v2.2 简化版 */
-  async sendMessageStream(
-    sessionId: string,
-    content: string,
-    callbacks: {
-      onEvent?: (event: ThinkingEvent) => void;
-      onThinking?: (message: string) => void;
-      onDone?: (message: Message) => void;
-      onError?: (error: string) => void;
-    }
-  ): Promise<Message> {
-    // 使用直接后端地址，绕过 Vite 代理的缓冲
-    const url = `${SSE_API_BASE}/sessions/${sessionId}/messages/stream`;
-
-    console.log('[SSE] 开始流式请求');
-
-    // 添加 token 到 SSE 请求
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.authToken) {
-      headers.Authorization = `Bearer ${this.authToken}`;
-    }
-
-    const response = await fetch(url, {
+// Auth API
+export const authApi = {
+  login: async (body: LoginRequest): Promise<AuthResponse> => {
+    // 后端直接返回 AuthResponse，不包裹在 ApiResponse 中
+    return request<AuthResponse>('/api/auth/login', {
       method: 'POST',
-      headers,
+      body: JSON.stringify(body),
+    })
+  },
+
+  register: async (body: RegisterRequest): Promise<AuthResponse> => {
+    // 后端直接返回 AuthResponse，不包裹在 ApiResponse 中
+    return request<AuthResponse>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+
+  getMe: async (): Promise<User> => {
+    // 后端直接返回 User，不包裹在 ApiResponse 中
+    return request<User>('/api/auth/me')
+  },
+
+  changePassword: async (oldPassword: string, newPassword: string): Promise<void> => {
+    await request('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    })
+  },
+}
+
+// DataSource API
+export const datasourceApi = {
+  list: async () => {
+    const res = await request<ApiResponse<{ id: string; name: string; type: string; host: string; port: number; database: string; status: string; created_at: string }[]>>('/api/datasources')
+    return res.data || []
+  },
+
+  create: async (body: {
+    name: string
+    type: string
+    host: string
+    port: number
+    database: string
+    username: string
+    password: string
+    schema_name?: string
+  }) => {
+    const res = await request<ApiResponse<{ id: string; name: string; type: string }>>('/api/datasources', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    return res.data!
+  },
+
+  delete: async (id: string) => {
+    const res = await request<ApiResponse<{ deleted_sessions: number }>>(`/api/datasources/${id}`, { method: 'DELETE' })
+    return res.data!
+  },
+
+  test: async (body: {
+    type: string
+    host: string
+    port: number
+    database: string
+    username: string
+    password: string
+    schema_name?: string
+  }) => {
+    const res = await request<ApiResponse<{ success: boolean; message: string }>>('/api/datasources/test', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    return res.data!
+  },
+
+  getSchema: async (id: string) => {
+    const res = await request<ApiResponse<{ tables: { name: string; columns: { name: string; type: string }[] }[] }>>(`/api/datasources/${id}/schema`)
+    return res.data!
+  },
+}
+
+// Session API
+interface SessionListResponse {
+  code: number
+  data: {
+    id: string
+    datasource_id: string
+    datasource_name: string
+    title: string | null
+    message_count: number
+    created_at: string
+    last_active_at: string
+  }[]
+  next_cursor?: string
+  has_more?: boolean
+}
+
+export const sessionApi = {
+  list: async (cursor?: string, limit = 20) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (cursor) params.set('cursor', cursor)
+    const res = await request<SessionListResponse>(`/api/sessions?${params}`)
+    return { data: res.data || [], nextCursor: res.next_cursor, hasMore: res.has_more }
+  },
+
+  create: async (datasourceId: string) => {
+    const res = await request<ApiResponse<{
+      id: string
+      session_id: string
+      datasource_id: string
+      datasource_name: string
+      title: string | null
+    }>>('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ datasource_id: datasourceId }),
+    })
+    return res.data!
+  },
+
+  delete: async (id: string) => {
+    await request(`/api/sessions/${id}`, { method: 'DELETE' })
+  },
+
+  getMessages: async (sessionId: string, limit = 50) => {
+    const res = await request<ApiResponse<{
+      session_id: string
+      messages: {
+        id: string
+        role: string
+        blocks: { type: string; content: string }[]
+        sql?: string
+        result?: { columns: string[]; rows: unknown[][]; total: number; truncated: boolean }
+        created_at: string
+      }[]
+    }>>(`/api/sessions/${sessionId}/messages?limit=${limit}`)
+    return res.data?.messages || []
+  },
+
+  sendMessage: async (sessionId: string, content: string) => {
+    const res = await request<ApiResponse<{
+      message_id: string
+      role: string
+      content: string
+      sql?: string
+    }>>(`/api/sessions/${sessionId}/messages`, {
+      method: 'POST',
       body: JSON.stringify({ content }),
-    });
+    })
+    return res.data!
+  },
+}
 
+// SSE Stream
+export function createMessageStream(
+  sessionId: string,
+  content: string,
+  onMessage: (event: { type: string; content?: string; sql?: string; result?: unknown; error?: string }) => void,
+  onError: (error: Error) => void,
+  onComplete: () => void
+) {
+  const token = localStorage.getItem('token')
+
+  fetch(`${API_BASE}/api/sessions/${sessionId}/messages/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ content }),
+  }).then(async (response) => {
     if (!response.ok) {
-      const error = `HTTP ${response.status}`;
-      callbacks.onError?.(error);
-      throw new Error(error);
+      const data = await response.json()
+      throw new Error(data.detail?.message || '请求失败')
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('No response body');
-    }
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应')
 
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let currentEventType = '';
-    const events: ThinkingEvent[] = [];
-    const blocks: ContentBlock[] = [];
-    let sql = '';
-    let error = '';
+    const decoder = new TextDecoder()
+    let buffer = ''
 
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await reader.read()
+      if (done) break
 
-      if (done) {
-        console.log('[SSE] 流结束');
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      console.log('[SSE] 收到数据块:', buffer.length, '字节');
-
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
 
       for (const line of lines) {
-        if (line.startsWith('event:')) {
-          currentEventType = line.slice(6).trim();
-          console.log('[SSE] 事件类型:', currentEventType);
-          continue;
-        }
-
-        if (line.startsWith('data:')) {
-          const dataStr = line.slice(5).trim();
-          if (!dataStr) continue;
-
+        if (line.startsWith('data: ')) {
           try {
-            const data = JSON.parse(dataStr);
-            const event = { type: currentEventType, ...data } as ThinkingEvent;
-            events.push(event);
-
-            // 立即触发回调，让 UI 实时更新
-            console.log('[SSE] 触发事件回调:', currentEventType);
-            callbacks.onEvent?.(event);
-
-            switch (currentEventType) {
-              case 'thinking':
-                callbacks.onThinking?.(data.content || '思考中...');
-                break;
-
-              case 'tool_call':
-                callbacks.onThinking?.(`调用工具：${data.tool}`);
-                break;
-
-              case 'sql_generation':
-                sql = data.sql || '';
-                callbacks.onThinking?.('已生成 SQL');
-                break;
-
-              case 'message':
-                if (data.content) {
-                  blocks.push({ type: 'text', content: data.content });
-                }
-                break;
-
-              // 处理 render_chart 工具调用结果
-              case 'tool_result':
-                if (data.tool === 'render_chart' && data.output) {
-                  try {
-                    const chartData = JSON.parse(data.output);
-                    if (chartData.option) {
-                      blocks.push({
-                        type: 'chart',
-                        chartType: chartData.chart_type || 'bar',
-                        title: chartData.title || '图表',
-                        option: chartData.option,
-                      });
-                    }
-                  } catch (e) {
-                    console.error('[SSE] 解析图表数据失败:', e);
-                  }
-                }
-                // 处理 export_data 工具调用结果
-                if (data.tool === 'export_data' && data.output) {
-                  try {
-                    const exportData = JSON.parse(data.output);
-                    if (exportData.download_id && !exportData.error) {
-                      blocks.push({
-                        type: 'export',
-                        filename: exportData.filename || 'export.csv',
-                        format: exportData.format || 'csv',
-                        size: exportData.size || 0,
-                        downloadId: exportData.download_id,
-                        rowCount: exportData.row_count || 0,
-                        columnCount: exportData.column_count || 0,
-                      });
-                    } else if (exportData.error) {
-                      console.error('[SSE] 导出失败:', exportData.error);
-                    }
-                  } catch (e) {
-                    console.error('[SSE] 解析导出数据失败:', e);
-                  }
-                }
-                break;
-
-              case 'error':
-                error = data.message || '处理失败';
-                callbacks.onError?.(error);
-                break;
-
-              case 'done':
-                // 从 done 事件的 data 字段中提取最终内容
-                if (data.data) {
-                  const finalData = data.data;
-                  if (finalData.content && !blocks.some(b => b.type === 'text' && b.content === finalData.content)) {
-                    blocks.push({ type: 'text', content: finalData.content });
-                  }
-                  if (finalData.sql && !sql) {
-                    sql = finalData.sql;
-                  }
-                }
-                break;
+            const data = JSON.parse(line.slice(6))
+            onMessage(data)
+            if (data.type === 'done' || data.type === 'error') {
+              onComplete()
+              return
             }
-          } catch (e) {
-            console.error('[SSE] 解析错误:', e);
+          } catch {
+            // Ignore parse errors
           }
         }
       }
     }
-
-    console.log('[SSE] 总事件数:', events.length);
-
-    const finalMessage: Message = {
-      id: `msg-${Date.now()}`,
-      role: 'assistant',
-      blocks,
-      sql: sql || undefined,
-      thinking_process: events,
-      created_at: new Date().toISOString(),
-      error: error || undefined,
-    };
-
-    callbacks.onDone?.(finalMessage);
-    return finalMessage;
-  }
+    onComplete()
+  }).catch(onError)
 }
 
-export const apiService = new ApiService();
-export default apiService;
+// Enhanced SSE Stream for Agent Steps
+export type AgentStreamCallback = {
+  onContent: (content: string) => void
+  onStep: (step: AgentStepEvent) => void
+  onError: (error: string) => void
+  onComplete: () => void
+}
+
+// Filter thinking tags from content - supports multiple formats
+export function filterThinkingContent(content: string): string {
+  return content
+    // XML-style tags: <thinking>...</thinking>, <think>...</think>
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    // Markdown-style: **(thinking)**...**/thinking**
+    .replace(/\*\*\(thinking\)\*\*[\s\S]*?\*\*\/thinking\*\*/gi, '')
+    .replace(/\*\*thinking\*\*[\s\S]*?\*\*\/thinking\*\*/gi, '')
+    // Chinese variants
+    .replace(/\*\*思考中\*\*[\s\S]*?\*\*\/思考中\*\*/gi, '')
+    // Plain text thinking blocks
+    .replace(/^\s*thinking:\s*[\s\S]*?(?=\n\n|\n[A-Z]|$)/gim, '')
+    // Anthropic Claude extended thinking format
+    .replace(/\u003cthinking\u003e[\s\S]*?\u003c\/thinking\u003e/gi, '')
+    .trim()
+}
+
+export function createAgentMessageStream(
+  sessionId: string,
+  content: string,
+  callbacks: AgentStreamCallback
+) {
+  const token = localStorage.getItem('token')
+
+  fetch(`${API_BASE}/api/sessions/${sessionId}/messages/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ content }),
+  }).then(async (response) => {
+    if (!response.ok) {
+      const data = await response.json()
+      throw new Error(data.detail?.message || '请求失败')
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const event = JSON.parse(line.slice(6)) as AgentStepEvent
+
+            // Filter out thinking events
+            if (event.type === 'thinking') {
+              console.log('[SSE] Filtered thinking event:', event)
+              continue
+            }
+
+            // Handle different event types
+            if (event.type === 'message' && event.content) {
+              // Filter thinking tags from content
+              const filteredContent = filterThinkingContent(event.content)
+              if (filteredContent) {
+                callbacks.onContent(filteredContent)
+              }
+            } else if (event.type === 'done') {
+              callbacks.onComplete()
+              return
+            } else if (event.type === 'error') {
+              callbacks.onError(event.error || '未知错误')
+              callbacks.onComplete()
+              return
+            } else {
+              // Pass other step events (tool_call, tool_result, sql_generation, sql_execution)
+              callbacks.onStep(event)
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }
+    }
+    callbacks.onComplete()
+  }).catch((err) => {
+    callbacks.onError(err.message || '请求失败')
+    callbacks.onComplete()
+  })
+}
+
+export { ApiError }

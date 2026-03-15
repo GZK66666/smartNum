@@ -1,140 +1,90 @@
-import { ReactNode, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useAuthStore } from '@/store/auth';
-import { Database, MessageSquare, Settings, Zap, LogOut, User } from 'lucide-react';
+import { Outlet, NavLink } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import {
+  Database,
+  MessageSquare,
+  LogOut,
+  LayoutDashboard,
+  Sparkles,
+} from 'lucide-react'
+import { useAuth } from '../store/auth'
 
-interface LayoutProps {
-  children: ReactNode;
-}
+export default function Layout() {
+  const { user, logout } = useAuth()
 
-const navItems = [
-  { path: '/', label: '数据源', icon: Database },
-  { path: '/chat', label: '对话', icon: MessageSquare },
-];
-
-export default function Layout({ children }: LayoutProps) {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const { user, logout } = useAuthStore();
-  const [showUserMenu, setShowUserMenu] = useState(false);
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
+  const navItems = [
+    { to: '/', icon: LayoutDashboard, label: '仪表盘' },
+    { to: '/datasources', icon: Database, label: '数据源' },
+    { to: '/chat', icon: MessageSquare, label: '对话' },
+  ]
 
   return (
-    <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 overflow-hidden">
-      {/* Header */}
-      <header className="glass border-b border-slate-700/50 sticky top-0 z-50 flex-shrink-0">
-        <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            {/* Logo */}
-            <Link to="/" className="flex items-center gap-3 group">
-              <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-r from-primary-500 to-accent-500 rounded-lg blur opacity-50 group-hover:opacity-75 transition-opacity" />
-                <div className="relative bg-slate-900 rounded-lg p-2 border border-slate-700">
-                  <Zap className="w-6 h-6 text-primary-400" />
-                </div>
-              </div>
-              <div>
-                <h1 className="text-xl font-bold gradient-text">smartNum</h1>
-                <p className="text-xs text-slate-500">智能问数系统 V3.0</p>
-              </div>
-            </Link>
+    <div className="min-h-screen bg-dark-900 relative overflow-hidden">
+      {/* Background Effects */}
+      <div className="fixed inset-0 bg-mesh pointer-events-none" />
+      <div className="fixed inset-0 bg-noise pointer-events-none" />
 
-            {/* Navigation */}
-            <nav className="flex items-center gap-1">
-              {navItems.map((item) => {
-                const isActive = location.pathname === item.path ||
-                  (item.path === '/chat' && location.pathname.startsWith('/chat'));
-                const Icon = item.icon;
-                return (
-                  <Link
-                    key={item.path}
-                    to={item.path}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
-                      isActive
-                        ? 'bg-slate-800 text-primary-400'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <Icon className="w-4 h-4" />
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-            </nav>
-
-            {/* User Menu */}
-            <div className="flex items-center gap-4">
-              {user && (
-                <div className="relative">
-                  <button
-                    onClick={() => setShowUserMenu(!showUserMenu)}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 hover:border-slate-600 transition-all"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white font-semibold text-sm">
-                      {user.username.charAt(0).toUpperCase()}
-                    </div>
-                    <span className="text-sm text-slate-300 max-w-[120px] truncate">
-                      {user.username}
-                    </span>
-                  </button>
-
-                  {/* Dropdown Menu */}
-                  {showUserMenu && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-10"
-                        onClick={() => setShowUserMenu(false)}
-                      />
-                      <div className="absolute right-0 mt-2 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-20 overflow-hidden">
-                        <div className="px-4 py-3 border-b border-slate-700">
-                          <p className="text-sm font-medium text-white">{user.username}</p>
-                          {user.email && (
-                            <p className="text-xs text-slate-400 truncate mt-1">{user.email}</p>
-                          )}
-                        </div>
-                        <button
-                          onClick={handleLogout}
-                          className="w-full flex items-center gap-2 px-4 py-3 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
-                        >
-                          <LogOut className="w-4 h-4" />
-                          退出登录
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
+      {/* Sidebar */}
+      <motion.aside
+        initial={{ x: -280 }}
+        animate={{ x: 0 }}
+        className="fixed left-0 top-0 bottom-0 w-64 bg-dark-800/50 backdrop-blur-xl border-r border-white/5 z-50"
+      >
+        {/* Logo */}
+        <div className="p-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-primary to-accent-secondary flex items-center justify-center">
+              <Sparkles className="w-5 h-5 text-dark-900" />
             </div>
+            <span className="font-display font-bold text-xl text-white">SmartNum</span>
           </div>
         </div>
-      </header>
+
+        {/* Navigation */}
+        <nav className="px-4 mt-4">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-4 py-3 rounded-xl mb-1 transition-all duration-200 ${
+                  isActive
+                    ? 'bg-accent-primary/10 text-accent-primary'
+                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                }`
+              }
+            >
+              <item.icon className="w-5 h-5" />
+              <span className="font-medium">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* User Section */}
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-white/5">
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5">
+            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-accent-secondary to-accent-primary flex items-center justify-center text-dark-900 font-bold">
+              {user?.username?.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-white font-medium truncate">{user?.username}</p>
+              <p className="text-gray-500 text-sm">在线</p>
+            </div>
+            <button
+              onClick={logout}
+              className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              title="退出登录"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </motion.aside>
 
       {/* Main Content */}
-      <main className="flex-1 relative flex flex-col min-h-0 overflow-hidden">
-        {/* Background decoration */}
-        <div className="fixed inset-0 -z-10 overflow-hidden">
-          <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary-500/10 rounded-full blur-3xl" />
-          <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-accent-500/10 rounded-full blur-3xl" />
-        </div>
-
-        <div className="flex-1 overflow-hidden">
-          {children}
-        </div>
+      <main className="ml-64 min-h-screen">
+        <Outlet />
       </main>
-
-      {/* Footer */}
-      <footer className="glass border-t border-slate-700/50 py-4">
-        <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between text-sm text-slate-500">
-            <span>smartNum V3.0</span>
-            <span>基于 DeepAgents 框架构建</span>
-          </div>
-        </div>
-      </footer>
     </div>
-  );
+  )
 }

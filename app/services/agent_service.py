@@ -91,6 +91,7 @@ class PlanEvent(SSEEvent):
 class ToolCallEvent(SSEEvent):
     """工具调用事件"""
     type: str = "tool_call"
+    name: str = None  # 显示名称，如 "列出数据表"
     tool: str = None
     input: dict = None
     id: str = None
@@ -100,6 +101,7 @@ class ToolCallEvent(SSEEvent):
 class ToolResultEvent(SSEEvent):
     """工具结果事件"""
     type: str = "tool_result"
+    name: str = None  # 显示名称
     tool: str = None
     id: str = None
     output: str = None
@@ -109,6 +111,7 @@ class ToolResultEvent(SSEEvent):
 class SQLGenerationEvent(SSEEvent):
     """SQL 生成事件"""
     type: str = "sql_generation"
+    name: str = "生成 SQL"
     sql: str = None
 
 
@@ -116,6 +119,7 @@ class SQLGenerationEvent(SSEEvent):
 class SQLExecutionEvent(SSEEvent):
     """SQL 执行事件"""
     type: str = "sql_execution"
+    name: str = "执行查询"
     status: str = None
     duration: float = None
 
@@ -153,7 +157,7 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询
 1. **列出表名**：先用 `list_tables` 查看有哪些表可用（返回信息精简）
 2. **按需查结构**：根据用户问题，只调用 `get_table_schema` 查询相关表的结构
 3. **执行查询**：使用 `run_sql` 执行 SQL 获取数据
-4. **回答问题**：用自然语言回答，数据结果用 Markdown 表格展示
+4. **回答问题**：用自然语言回答，**数据结果必须用 Markdown 表格格式展示**
 5. **可视化（可选）**：如果用户要求图表，调用 `render_chart` 生成 ECharts 配置
 6. **导出（可选）**：如果用户要求导出表格，调用 `export_data` 生成可下载文件
 
@@ -210,11 +214,23 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询
 
 ## 输出规则
 
-1. 数据结果用 Markdown 表格展示
-2. 用简洁的自然语言解读关键发现
-3. 直接回答用户的问题
-4. 用户要求图表时，调用 render_chart 工具生成配置
-5. 用户要求导出时，调用 export_data 工具生成文件
+**重要：所有数据结果必须使用 Markdown 表格格式展示，禁止使用空格对齐的纯文本格式！**
+
+### Markdown 表格格式示例：
+```markdown
+| 部门名称 | 用户数量 |
+|----------|----------|
+| 顶级部门 | 156 |
+| 产品部门 | 1 |
+| 测试一组 | 2 |
+```
+
+### 输出要求：
+1. **表格格式**：任何包含多行多列的数据都必须用 Markdown 表格展示
+2. **简洁解读**：用自然语言解读关键发现，表格前后添加简要说明
+3. **直接回答**：直接回答用户的问题，不要重复用户的问题
+4. **图表请求**：用户要求图表时，调用 render_chart 工具生成配置
+5. **导出请求**：用户要求导出时，调用 export_data 工具生成文件
 
 ## 安全规则
 
@@ -1006,17 +1022,11 @@ async def process_query_stream(
                 if isinstance(event, MessageEvent) and event.content:
                     final_result["content"] = event.content
 
-                # 处理 SQL 相关事件
+                # 收集 SQL（用于保存到消息记录）
                 if isinstance(event, ToolCallEvent) and event.tool == "run_sql":
                     sql = event.input.get("sql", "") if event.input else ""
                     if sql:
                         final_result["sql"] = sql
-                        yield SQLGenerationEvent(sql=sql).to_dict()
-                        yield SQLExecutionEvent(status="running").to_dict()
-
-                # 处理 run_sql 结果
-                if isinstance(event, ToolResultEvent) and event.tool == "run_sql":
-                    yield SQLExecutionEvent(status="completed").to_dict()
 
                 yield event.to_dict()
                 await asyncio.sleep(0)
@@ -1060,15 +1070,18 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
                     tool_calls = getattr(last_msg, "tool_calls", None)
                     if tool_calls:
                         tc = tool_calls[-1]
+                        tool_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
                         if isinstance(tc, dict):
                             return ToolCallEvent(
-                                tool=tc.get("name", "unknown"),
+                                name=tool_name,
+                                tool=tool_name,
                                 input=tc.get("args", {}),
                                 id=tc.get("id", str(uuid.uuid4()))
                             )
                         else:
                             return ToolCallEvent(
-                                tool=getattr(tc, "name", "unknown"),
+                                name=tool_name,
+                                tool=tool_name,
                                 input=getattr(tc, "args", {}) or {},
                                 id=getattr(tc, "id", str(uuid.uuid4()))
                             )
@@ -1078,6 +1091,7 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
                     msg_name = getattr(last_msg, "name", None)
                     if msg_type == "tool" and msg_name:
                         return ToolResultEvent(
+                            name=msg_name,
                             tool=msg_name,
                             id=str(uuid.uuid4()),
                             output=json.dumps(content) if isinstance(content, dict) else str(content)[:2000] if content else ""
@@ -1100,14 +1114,17 @@ def _parse_agent_chunk(chunk: dict) -> Optional[SSEEvent]:
 
                     if tool_calls:
                         tc = tool_calls[-1]
+                        tool_name = tc.get("name", msg_name or "unknown")
                         return ToolCallEvent(
-                            tool=tc.get("name", msg_name or "unknown"),
+                            name=tool_name,
+                            tool=tool_name,
                             input=tc.get("args", {}),
                             id=tc.get("id", str(uuid.uuid4()))
                         )
 
                     if msg_type == "tool":
                         return ToolResultEvent(
+                            name=msg_name,
                             tool=msg_name,
                             id=str(uuid.uuid4()),
                             output=msg_content if isinstance(msg_content, dict) else str(msg_content)[:2000] if msg_content else ""

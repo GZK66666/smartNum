@@ -103,6 +103,7 @@ class Message(Base):
     sql = Column(Text, comment="生成的 SQL 语句")
     result = Column(LONGTEXT, comment="查询结果 (JSON)")
     result_truncated = Column(Integer, default=0, comment="结果是否截断：1-是 0-否")
+    agent_steps = Column(LONGTEXT, comment="智能体执行步骤 (JSON)")
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
 
     # 关系

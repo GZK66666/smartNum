@@ -159,13 +159,15 @@ async def delete_datasource(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """删除数据源"""
-    service = DataSourceService(db, user_id)
-    success = await service.delete_datasource(datasource_id)
+    """删除数据源（同时删除关联的会话）"""
+    from sqlalchemy import select, func
+    from app.models.models import Session
 
-    if success:
-        return {"code": 0, "message": "数据源已删除"}
-    else:
+    service = DataSourceService(db, user_id)
+
+    # 检查数据源是否存在
+    datasource = await service.get_datasource(datasource_id)
+    if not datasource:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -173,6 +175,23 @@ async def delete_datasource(
                 "message": "数据源不存在",
             },
         )
+
+    # 统计关联的会话数量
+    result = await db.execute(
+        select(func.count(Session.id)).where(Session.datasource_id == datasource_id)
+    )
+    session_count = result.scalar() or 0
+
+    # 删除数据源（级联删除会话）
+    await service.delete_datasource(datasource_id)
+
+    return {
+        "code": 0,
+        "message": "数据源已删除",
+        "data": {
+            "deleted_sessions": session_count,
+        }
+    }
 
 
 @router.get("/{datasource_id}/schema", response_model=dict)
