@@ -1,10 +1,6 @@
 # SmartNum
 
 <p align="center">
-  <img src="docs/images/logo.svg" alt="SmartNum Logo" width="120" height="120">
-</p>
-
-<p align="center">
   <strong>智能问数系统 - 让数据查询像对话一样简单</strong>
 </p>
 
