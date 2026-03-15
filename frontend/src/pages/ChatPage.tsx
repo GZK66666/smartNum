@@ -18,6 +18,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { sessionApi, datasourceApi, createAgentMessageStream, filterThinkingContent } from '../services/api'
 import AgentSteps from '../components/AgentSteps'
+import ChartRenderer from '../components/ChartRenderer'
+import ExportCard from '../components/ExportCard'
 import type { Session, Message, DataSource, AgentStep, AgentStepEvent } from '../types'
 
 export default function ChatPage() {
@@ -472,53 +474,118 @@ export default function ChatPage() {
                       {msg.agentSteps && msg.agentSteps.length > 0 && (
                         <AgentSteps steps={msg.agentSteps} isStreaming={false} />
                       )}
-                      {msg.result?.columns && msg.result?.rows && (
-                        <div className="glass-card overflow-hidden">
-                          <div className="flex items-center gap-2 px-4 py-3 border-b border-white/5">
-                            <Table className="w-4 h-4 text-gray-400" />
-                            <span className="text-sm font-medium text-gray-400">查询结果</span>
-                            <span className="text-xs text-gray-500 ml-auto">
-                              {msg.result.total} 行{msg.result.truncated && ' (已截断)'}
-                            </span>
-                          </div>
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                              <thead>
-                                <tr className="border-b border-white/5">
-                                  {msg.result.columns.map((col) => (
-                                    <th key={col} className="px-4 py-2 text-left text-gray-400 font-medium">
-                                      {col}
-                                    </th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {msg.result.rows.slice(0, 10).map((row, i) => (
-                                  <tr key={i} className="border-b border-white/5 last:border-0">
-                                    {Array.isArray(row) && row.map((cell, j) => (
-                                      <td key={j} className="px-4 py-2 text-gray-300">
-                                        {String(cell ?? 'NULL')}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                            {msg.result.rows.length > 10 && (
-                              <div className="px-4 py-2 text-center text-gray-500 text-sm border-t border-white/5">
-                                还有 {msg.result.rows.length - 10} 行...
+                      {(() => {
+                        // 检查是否是可视化请求（有 render_chart 步骤）
+                        const hasChart = msg.agentSteps?.some(step => step.tool === 'render_chart' || step.name === 'render_chart')
+                        // 检查是否是导出请求（有 export_data 步骤）
+                        const hasExport = msg.agentSteps?.some(step => step.tool === 'export_data' || step.name === 'export_data')
+
+                        if (hasChart) {
+                          // 可视化请求：只渲染图表
+                          const chartStep = msg.agentSteps?.find(step => step.tool === 'render_chart' || step.name === 'render_chart')
+                          if (chartStep?.details) {
+                            const outputMatch = chartStep.details.match(/【输出】\n([\s\S]*)/)
+                            if (outputMatch) {
+                              try {
+                                const chartData = JSON.parse(outputMatch[1])
+                                if (chartData.option) {
+                                  return (
+                                    <ChartRenderer
+                                      chartType={chartData.chart_type || 'bar'}
+                                      title={chartData.title || '图表'}
+                                      option={chartData.option}
+                                    />
+                                  )
+                                }
+                              } catch (e) {
+                                console.error('解析图表数据失败:', e)
+                              }
+                            }
+                          }
+                          return null
+                        }
+
+                        if (hasExport) {
+                          // 导出请求：只渲染下载卡片
+                          const exportStep = msg.agentSteps?.find(step => step.tool === 'export_data' || step.name === 'export_data')
+                          if (exportStep?.details) {
+                            const outputMatch = exportStep.details.match(/【输出】\n([\s\S]*)/)
+                            if (outputMatch) {
+                              try {
+                                const exportData = JSON.parse(outputMatch[1])
+                                if (exportData.download_id) {
+                                  return (
+                                    <ExportCard
+                                      filename={exportData.filename || 'export'}
+                                      format={exportData.format || 'csv'}
+                                      size={exportData.size || 0}
+                                      downloadId={exportData.download_id}
+                                      rowCount={exportData.row_count || 0}
+                                      columnCount={exportData.column_count || 0}
+                                    />
+                                  )
+                                }
+                              } catch (e) {
+                                console.error('解析导出数据失败:', e)
+                              }
+                            }
+                          }
+                          return null
+                        }
+
+                        // 非可视化/导出请求：正常显示查询结果和文字
+                        return (
+                          <>
+                            {msg.result?.columns && msg.result?.rows && (
+                              <div className="glass-card overflow-hidden">
+                                <div className="flex items-center gap-2 px-4 py-3 border-b border-white/5">
+                                  <Table className="w-4 h-4 text-gray-400" />
+                                  <span className="text-sm font-medium text-gray-400">查询结果</span>
+                                  <span className="text-xs text-gray-500 ml-auto">
+                                    {msg.result.total} 行{msg.result.truncated && ' (已截断)'}
+                                  </span>
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr className="border-b border-white/5">
+                                        {msg.result.columns.map((col) => (
+                                          <th key={col} className="px-4 py-2 text-left text-gray-400 font-medium">
+                                            {col}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {msg.result.rows.slice(0, 10).map((row, i) => (
+                                        <tr key={i} className="border-b border-white/5 last:border-0">
+                                          {Array.isArray(row) && row.map((cell, j) => (
+                                            <td key={j} className="px-4 py-2 text-gray-300">
+                                              {String(cell ?? 'NULL')}
+                                            </td>
+                                          ))}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                  {msg.result.rows.length > 10 && (
+                                    <div className="px-4 py-2 text-center text-gray-500 text-sm border-t border-white/5">
+                                      还有 {msg.result.rows.length - 10} 行...
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             )}
-                          </div>
-                        </div>
-                      )}
-                      {msg.blocks[0]?.content && (
-                        <div className="markdown-content">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {filterThinkingContent(msg.blocks[0].content)}
-                          </ReactMarkdown>
-                        </div>
-                      )}
+                            {msg.blocks[0]?.content && (
+                              <div className="markdown-content">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {filterThinkingContent(msg.blocks[0].content)}
+                                </ReactMarkdown>
+                              </div>
+                            )}
+                          </>
+                        )
+                      })()}
                     </div>
                   )}
                 </motion.div>
@@ -532,13 +599,74 @@ export default function ChatPage() {
                   className="mb-6"
                 >
                   <AgentSteps steps={streamingSteps} isStreaming={true} />
-                  {streamingContent && (
-                    <div className="markdown-content">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {filterThinkingContent(streamingContent)}
-                      </ReactMarkdown>
-                    </div>
-                  )}
+                  {(() => {
+                    // 检查是否是可视化请求
+                    const hasChart = streamingSteps.some(step => step.tool === 'render_chart' || step.name === 'render_chart')
+                    // 检查是否是导出请求
+                    const hasExport = streamingSteps.some(step => step.tool === 'export_data' || step.name === 'export_data')
+
+                    if (hasChart) {
+                      // 可视化请求：只渲染图表（完成后）
+                      const chartStep = streamingSteps.find(step => step.tool === 'render_chart' || step.name === 'render_chart')
+                      if (chartStep?.details && chartStep.status === 'completed') {
+                        const outputMatch = chartStep.details.match(/【输出】\n([\s\S]*)/)
+                        if (outputMatch) {
+                          try {
+                            const chartData = JSON.parse(outputMatch[1])
+                            if (chartData.option) {
+                              return (
+                                <ChartRenderer
+                                  chartType={chartData.chart_type || 'bar'}
+                                  title={chartData.title || '图表'}
+                                  option={chartData.option}
+                                />
+                              )
+                            }
+                          } catch (e) {
+                            console.error('解析图表数据失败:', e)
+                          }
+                        }
+                      }
+                      return null
+                    }
+
+                    if (hasExport) {
+                      // 导出请求：只渲染下载卡片（完成后）
+                      const exportStep = streamingSteps.find(step => step.tool === 'export_data' || step.name === 'export_data')
+                      if (exportStep?.details && exportStep.status === 'completed') {
+                        const outputMatch = exportStep.details.match(/【输出】\n([\s\S]*)/)
+                        if (outputMatch) {
+                          try {
+                            const exportData = JSON.parse(outputMatch[1])
+                            if (exportData.download_id) {
+                              return (
+                                <ExportCard
+                                  filename={exportData.filename || 'export'}
+                                  format={exportData.format || 'csv'}
+                                  size={exportData.size || 0}
+                                  downloadId={exportData.download_id}
+                                  rowCount={exportData.row_count || 0}
+                                  columnCount={exportData.column_count || 0}
+                                />
+                              )
+                            }
+                          } catch (e) {
+                            console.error('解析导出数据失败:', e)
+                          }
+                        }
+                      }
+                      return null
+                    }
+
+                    // 非可视化/导出请求：显示文字内容
+                    return streamingContent && (
+                      <div className="markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {filterThinkingContent(streamingContent)}
+                        </ReactMarkdown>
+                      </div>
+                    )
+                  })()}
                 </motion.div>
               )}
 
