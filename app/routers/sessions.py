@@ -90,7 +90,7 @@ async def list_sessions(
 ):
     """获取会话列表（无限滚动）"""
     session_service = SessionService(db, user_id)
-    sessions, next_cursor, has_more = await session_service.list_sessions(
+    sessions, next_cursor, has_more, total = await session_service.list_sessions(
         cursor=cursor,
         limit=limit,
     )
@@ -124,6 +124,7 @@ async def list_sessions(
         "data": result,
         "next_cursor": next_cursor,
         "has_more": has_more,
+        "total": total,
     }
 
 

@@ -88,7 +88,7 @@ class SessionService:
         self,
         cursor: str | None = None,
         limit: int = 20,
-    ) -> tuple[List[Session], str | None, bool]:
+    ) -> tuple[List[Session], str | None, bool, int]:
         """获取会话列表（支持无限滚动）
 
         Args:
@@ -96,9 +96,18 @@ class SessionService:
             limit: 每页数量
 
         Returns:
-            (sessions, next_cursor, has_more): 会话列表、下一页游标、是否还有更多
+            (sessions, next_cursor, has_more, total): 会话列表、下一页游标、是否还有更多、总数
         """
         import base64
+        from sqlalchemy import func
+
+        # 获取总数
+        count_query = select(func.count()).select_from(Session).where(
+            Session.user_id == self.user_id,
+            Session.is_archived == 0,
+        )
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
 
         query = (
             select(Session)
@@ -141,7 +150,7 @@ class SessionService:
             cursor_data = f"{last_session.last_active_at.isoformat()}|{last_session.id}"
             next_cursor = base64.b64encode(cursor_data.encode('utf-8')).decode('utf-8')
 
-        return sessions, next_cursor, has_more
+        return sessions, next_cursor, has_more, total
 
     async def update_session_title(self, session_id: str, title: str) -> Optional[Session]:
         """更新会话标题"""

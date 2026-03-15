@@ -19,11 +19,12 @@ export default function DashboardPage() {
   })
 
   const { data: sessionsData } = useQuery({
-    queryKey: ['sessions'],
+    queryKey: ['sessions', 'dashboard'],
     queryFn: () => sessionApi.list(undefined, 5),
   })
 
   const sessions = sessionsData?.data || []
+  const totalSessions = sessionsData?.total || 0
 
   const stats = [
     {
@@ -34,7 +35,7 @@ export default function DashboardPage() {
     },
     {
       label: '会话数',
-      value: sessions.length,
+      value: totalSessions,
       icon: MessageSquare,
       color: 'from-accent-secondary to-blue-400',
     },

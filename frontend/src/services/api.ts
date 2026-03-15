@@ -140,6 +140,7 @@ interface SessionListResponse {
   }[]
   next_cursor?: string
   has_more?: boolean
+  total?: number
 }
 
 export const sessionApi = {
@@ -147,7 +148,7 @@ export const sessionApi = {
     const params = new URLSearchParams({ limit: String(limit) })
     if (cursor) params.set('cursor', cursor)
     const res = await request<SessionListResponse>(`/api/sessions?${params}`)
-    return { data: res.data || [], nextCursor: res.next_cursor, hasMore: res.has_more }
+    return { data: res.data || [], nextCursor: res.next_cursor, hasMore: res.has_more, total: res.total || 0 }
   },
 
   create: async (datasourceId: string) => {
