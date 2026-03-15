@@ -6,6 +6,7 @@ import {
   LogOut,
   LayoutDashboard,
   Sparkles,
+  BookOpen,
 } from 'lucide-react'
 import { useAuth } from '../store/auth'
 
@@ -16,6 +17,7 @@ export default function Layout() {
     { to: '/', icon: LayoutDashboard, label: '仪表盘' },
     { to: '/datasources', icon: Database, label: '数据源' },
     { to: '/chat', icon: MessageSquare, label: '对话' },
+    { to: '/knowledge', icon: BookOpen, label: '知识库' },
   ]
 
   return (

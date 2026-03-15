@@ -9,6 +9,7 @@ import DashboardPage from './pages/DashboardPage'
 import DataSourcePage from './pages/DataSourcePage'
 import NewDataSourcePage from './pages/NewDataSourcePage'
 import ChatPage from './pages/ChatPage'
+import KnowledgePage from './pages/KnowledgePage'
 
 // Components
 import Layout from './components/Layout'
@@ -63,6 +64,10 @@ const router = createBrowserRouter([
           {
             path: 'chat/:sessionId?',
             element: <ChatPage />,
+          },
+          {
+            path: 'knowledge',
+            element: <KnowledgePage />,
           },
         ],
       },

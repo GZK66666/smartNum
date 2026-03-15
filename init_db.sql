@@ -124,6 +124,35 @@ CREATE TABLE export_files (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='导出文件表';
 
 -- ============================================================
+-- 知识文件表
+-- ============================================================
+DROP TABLE IF EXISTS knowledge_files;
+CREATE TABLE knowledge_files (
+    id VARCHAR(36) PRIMARY KEY COMMENT '文件 ID (UUID)',
+    datasource_id VARCHAR(36) COMMENT '关联数据源 ID（为空表示全局知识）',
+    filename VARCHAR(255) NOT NULL COMMENT '原始文件名',
+    file_type VARCHAR(20) NOT NULL COMMENT '文件扩展名: txt/md/docx/pdf',
+    category VARCHAR(20) NOT NULL COMMENT '类别: raw/curated',
+    sub_category VARCHAR(50) COMMENT '子类别: indicators/rules/datasets/glossary',
+    raw_path VARCHAR(500) COMMENT '原始文件路径',
+    processed_path VARCHAR(500) COMMENT '处理后文本路径',
+    title VARCHAR(200) COMMENT '标题（可编辑）',
+    description TEXT COMMENT '描述（可编辑）',
+    tags JSON COMMENT '标签列表',
+    auto_summary TEXT COMMENT '自动摘要',
+    mentioned_tables JSON COMMENT '提到的表名',
+    file_size INT COMMENT '文件大小（字节）',
+    use_count INT DEFAULT 0 COMMENT '使用次数',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_knowledge_datasource (datasource_id),
+    INDEX idx_knowledge_category (category),
+    INDEX idx_knowledge_sub_category (sub_category),
+    CONSTRAINT fk_knowledge_datasource
+        FOREIGN KEY (datasource_id) REFERENCES datasources(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识文件表';
+
+-- ============================================================
 -- 触发器：更新会话最后活跃时间 & 消息计数
 -- ============================================================
 DROP TRIGGER IF EXISTS trg_update_session_active;

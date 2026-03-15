@@ -157,94 +157,38 @@ class DoneEvent(SSEEvent):
 
 # ==================== 系统提示词 ====================
 
-SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，专门帮助用户查询和分析数据库中的数据。
+SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分析数据库中的数据。
 
-## 工作流程（渐进式上下文加载）
+## 知识库
 
-**重要**：不要一次性加载所有表结构，按需逐步查询，避免上下文溢出。
+系统中有一个知识库，存储了用户上传的业务文档，可能包含但不限于：
+- 数据字典和字段说明
+- 业务规则和注意事项
+- 常用查询的写法参考
 
-1. **列出表名**：先用 `list_tables` 查看有哪些表可用（返回信息精简）
-2. **按需查结构**：根据用户问题，只调用 `get_table_schema` 查询相关表的结构
-3. **执行查询**：使用 `run_sql` 执行 SQL 获取数据
-4. **回答问题**：用自然语言回答，**数据结果必须用 Markdown 表格格式展示**
-5. **可视化（可选）**：如果用户要求图表，调用 `render_chart` 生成 ECharts 配置
-6. **导出（可选）**：如果用户要求导出表格，调用 `export_data` 生成可下载文件
+当不确定业务逻辑时，最好先查阅知识库。
 
-## 错误处理与迭代修复
+## 工具
 
-**当工具调用失败时，不要直接返回错误，要分析原因并重试：**
-
-1. **SQL 执行失败**：
-   - 分析错误信息（如语法错误、表不存在、列不存在等）
-   - 检查表名/列名是否正确，可能需要重新调用 `get_table_schema` 确认结构
-   - 修正 SQL 后重新执行
-   - 最多重试 3 次
-
-2. **Schema 查询失败**：
-   - 检查表名是否正确，可用 `list_tables` 确认
-   - 表名大小写敏感问题需注意
-
-3. **结果为空**：
-   - 检查查询条件是否过于严格
-   - 考虑放宽条件或检查数据是否存在
-
-**示例错误处理流程**：
-```
-用户: 查询用户表的前10条
-→ list_tables() → 发现有 users 表
-→ get_table_schema("users") → 获取列信息
-→ run_sql("SELECT * FROM user LIMIT 10") → 报错: Table 'user' doesn't exist
-→ 分析错误: 表名应该是 'users' 不是 'user'
-→ run_sql("SELECT * FROM users LIMIT 10") → 成功
-→ 返回结果
-```
-
-## 工具说明
+### explore_knowledge
+探索知识库文件。使用 shell 命令查看内容。
+示例：`ls -la` 列出文件，`cat *.txt` 查看内容，`grep "关键词" .` 搜索
 
 ### list_tables
-列出数据库所有表名和注释。返回精简信息，不包含列详情。
-**在查询数据前必须先调用此工具了解有哪些表。**
+列出数据库中的表。
 
 ### get_table_schema
-获取指定表的详细结构（列名、类型、注释）。
-**只在确定相关表后才调用，避免加载无关表结构。**
+获取表的字段结构。
 
 ### run_sql
-执行 SQL SELECT 查询并返回结果。只支持 SELECT 语句。
-**返回结果包含 success 字段，失败时会返回 error 信息。**
+执行 SELECT 查询。
 
-### render_chart
-当用户要求可视化时调用此工具，生成 ECharts 图表配置。
-**只在用户明确要求图表时使用，参数包含图表类型和数据。**
+### render_chart / export_data
+图表渲染和数据导出。
 
-### export_data
-当用户要求导出表格数据时调用此工具，生成可下载的文件。
-**支持 CSV 和 Excel 格式，参数包含文件名、数据数组和格式。默认使用 CSV 格式。**
+## 输出
 
-## 输出规则
-
-**重要：所有数据结果必须使用 Markdown 表格格式展示，禁止使用空格对齐的纯文本格式！**
-
-### Markdown 表格格式示例：
-```markdown
-| 部门名称 | 用户数量 |
-|----------|----------|
-| 顶级部门 | 156 |
-| 产品部门 | 1 |
-| 测试一组 | 2 |
-```
-
-### 输出要求：
-1. **表格格式**：任何包含多行多列的数据都必须用 Markdown 表格展示
-2. **简洁解读**：用自然语言解读关键发现，表格前后添加简要说明
-3. **直接回答**：直接回答用户的问题，不要重复用户的问题
-4. **图表请求**：用户要求图表时，调用 render_chart 工具生成配置
-5. **导出请求**：用户要求导出时，调用 export_data 工具生成文件
-
-## 安全规则
-
-- 只生成 SELECT 语句，禁止 DELETE/UPDATE/INSERT
-- 不查询敏感数据（如密码、身份证号）
+数据用 Markdown 表格展示。只执行 SELECT 语句，不查询敏感数据。
 """
 
 
@@ -868,6 +812,53 @@ async def cleanup_expired_export_files() -> int:
         return result.rowcount
 
 
+# ==================== 知识库工具 ====================
+
+@tool
+async def explore_knowledge(
+    command: str,
+) -> str:
+    """浏览知识库中的业务文档。
+
+    知识库存储了用户上传的业务规则、数据字典、注意事项等文档。
+    在查询数据前，可以浏览知识库了解业务背景，避免遗漏重要规则。
+
+    常用命令:
+    - ls -la : 查看有哪些知识文件
+    - cat *.txt : 阅读所有文件内容
+    - grep "关键词" *.txt : 搜索特定内容
+
+    Args:
+        command: 要执行的 shell 命令 (支持: ls, cat, grep, head, tail, wc, find)
+
+    Returns:
+        命令执行结果
+
+    Examples:
+        explore_knowledge("ls -la")  # 列出所有知识文件
+        explore_knowledge("cat *.txt")  # 阅读全部内容
+        explore_knowledge("grep -i '用户' *.txt")  # 搜索用户相关规则
+    """
+    from app.services.knowledge_service import KnowledgeService
+    from app.models.database import async_session_maker
+
+    ctx = get_db_context()
+    if ctx is None:
+        return "错误: 未找到数据库连接上下文"
+
+    datasource_id = ctx.get("datasource_id")
+    if not datasource_id:
+        return "错误: 未找到数据源ID"
+
+    async with async_session_maker() as session:
+        service = KnowledgeService(session)
+        output = service.explore_knowledge(
+            datasource_id=datasource_id,
+            command=command,
+        )
+        return output
+
+
 # ==================== DeepAgent 创建 ====================
 
 _agent = None
@@ -904,7 +895,10 @@ async def get_agent():
     _agent = create_deep_agent(
         name="smartnum-agent",
         model=llm,
-        tools=[list_tables, get_table_schema, run_sql, render_chart, export_data],
+        tools=[
+            list_tables, get_table_schema, run_sql, render_chart, export_data,
+            explore_knowledge,
+        ],
         system_prompt=SYSTEM_PROMPT,
         checkpointer=_checkpointer,
         store=_store,
