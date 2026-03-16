@@ -34,6 +34,10 @@ python-dotenv>=1.0.0
 # 数据导出
 openpyxl>=3.1.0
 
+# 文件数据源支持
+duckdb>=0.10.0
+pandas>=2.0.0
+
 # 知识库文件处理
 python-docx>=0.8.11
 pdfplumber>=0.10.0

@@ -1,9 +1,9 @@
 """数据源管理路由 - V3.0 版本"""
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Form, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 
 from app.models.database import get_db
 from app.routers.auth import get_current_user_id
@@ -236,3 +236,140 @@ async def get_schema(
         )
 
     return {"code": 0, "data": schema_info}
+
+
+@router.post("/upload", response_model=dict)
+async def upload_file_datasource(
+    name: str = Form(...),
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """上传文件创建数据源
+
+    流程：
+    1. 验证文件格式
+    2. 保存文件
+    3. 创建数据源记录
+    4. 返回预览和表信息
+    """
+    from app.services.file_datasource_service import FileDatasourceService
+    import uuid
+
+    file_service = FileDatasourceService()
+
+    # 验证文件
+    validation = await file_service.validate_file(file)
+    if not validation["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": ErrorCode.INVALID_REQUEST, "message": validation["message"]},
+        )
+
+    # 生成数据源 ID
+    datasource_id = str(uuid.uuid4())
+
+    # 保存文件
+    raw_path, file_ext = await file_service.save_file(datasource_id, file)
+
+    # 预览文件
+    preview = await file_service.preview_file(raw_path)
+
+    if not preview["success"]:
+        # 清理已上传的文件
+        await file_service.cleanup_datasource_files(datasource_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": ErrorCode.INVALID_REQUEST, "message": f"文件解析失败: {preview.get('error', '未知错误')}"},
+        )
+
+    # 获取表信息
+    tables_info = await file_service.get_tables_info(datasource_id)
+
+    # 创建数据源记录
+    ds_service = DataSourceService(db, user_id)
+    try:
+        datasource = await ds_service.create_datasource(
+            name=name,
+            type="file",
+            file_path=raw_path,
+            tables_info=tables_info,
+            datasource_id=datasource_id,
+        )
+    except Exception as e:
+        # 清理已上传的文件
+        await file_service.cleanup_datasource_files(datasource_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": ErrorCode.DB_CONNECTION_FAILED, "message": str(e)},
+        )
+
+    return {
+        "code": 0,
+        "data": {
+            "id": datasource.id,
+            "name": datasource.name,
+            "type": datasource.type,
+            "status": "connected",
+            "tables": tables_info,
+            "preview": {
+                "columns": preview["columns"],
+                "data": preview["data"][:10],  # 最多返回 10 行预览
+                "total_rows": preview["total_rows"],
+            },
+            "created_at": datasource.created_at,
+        },
+    }
+
+
+@router.post("/upload/preview", response_model=dict)
+async def preview_upload_file(
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """预览上传的文件（不创建数据源）
+
+    用于在上传前预览文件内容
+    """
+    from app.services.file_datasource_service import FileDatasourceService
+    import tempfile
+    import os
+
+    file_service = FileDatasourceService()
+
+    # 验证文件
+    validation = await file_service.validate_file(file)
+    if not validation["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": ErrorCode.INVALID_REQUEST, "message": validation["message"]},
+        )
+
+    # 保存到临时文件
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=validation["file_ext"]) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        # 预览文件
+        preview = await file_service.preview_file(tmp_path)
+
+        if not preview["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": ErrorCode.INVALID_REQUEST, "message": f"文件解析失败: {preview.get('error', '未知错误')}"},
+            )
+
+        return {
+            "code": 0,
+            "data": {
+                "filename": file.filename,
+                "columns": preview["columns"],
+                "data": preview["data"][:20],  # 返回 20 行预览
+                "total_rows": preview["total_rows"],
+            },
+        }
+    finally:
+        # 清理临时文件
+        os.unlink(tmp_path)

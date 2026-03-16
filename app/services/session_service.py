@@ -293,6 +293,7 @@ class SessionService:
             username=datasource.db_username,
             password=datasource.db_password,
             schema_name=datasource.schema_name,
+            tables_info=datasource.tables_info if datasource.type == "file" else None,
             query=content,
             context={"last_sql": None},
             history=history_dicts,

@@ -38,12 +38,13 @@ _db_context: ContextVar[dict] = ContextVar('db_context')
 def set_db_context(
     datasource_id: str,
     db_type: str,
-    host: str,
-    port: int,
-    database: str,
-    username: str,
-    password: str,
+    host: str = None,
+    port: int = None,
+    database: str = None,
+    username: str = None,
+    password: str = None,
     schema_name: Optional[str] = None,
+    tables_info: Optional[List[dict]] = None,
 ):
     """设置当前请求的数据库连接上下文"""
     _db_context.set({
@@ -55,6 +56,7 @@ def set_db_context(
         "username": username,
         "password": password,
         "schema_name": schema_name,
+        "tables_info": tables_info,
     })
 
 
@@ -216,7 +218,24 @@ async def list_tables(
     if ctx is None:
         return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
 
-    # 获取简化的表信息（只包含表名和注释）
+    # 文件类型使用 DuckDB
+    if ctx["db_type"] == "file":
+        from app.services.file_datasource_service import FileDatasourceService
+        service = FileDatasourceService()
+        tables_info = ctx.get("tables_info") or await service.get_tables_info(ctx["datasource_id"])
+
+        lines = ["# 数据表列表\n"]
+        lines.append("| 序号 | 表名 | 行数 |")
+        lines.append("|------|------|------|")
+
+        for i, table in enumerate(tables_info, 1):
+            table_name = table.get("name", "unknown")
+            row_count = table.get("row_count", 0)
+            lines.append(f"| {i} | {table_name} | {row_count} |")
+
+        return "\n".join(lines)
+
+    # 数据库类型使用原有逻辑
     url = db_service.get_database_url(
         ctx["db_type"],
         ctx["host"],
@@ -312,6 +331,36 @@ async def get_table_schema(
     if ctx is None:
         return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
 
+    # 文件类型使用 DuckDB
+    if ctx["db_type"] == "file":
+        from app.services.file_datasource_service import FileDatasourceService
+        service = FileDatasourceService()
+        tables_info = ctx.get("tables_info") or await service.get_tables_info(ctx["datasource_id"])
+
+        # 查找指定表
+        table_info = None
+        for t in tables_info:
+            if t.get("name") == table_name:
+                table_info = t
+                break
+
+        if not table_info:
+            return f"错误: 表 '{table_name}' 不存在"
+
+        lines = [f"# 表结构: {table_name}\n"]
+        lines.append(f"**行数**: {table_info.get('row_count', 0)}\n")
+        lines.append("\n| 列名 | 类型 | 可空 |")
+        lines.append("|------|------|------|")
+
+        for col in table_info.get("columns", []):
+            col_name = col.get("name", "unknown")
+            col_type = col.get("type", "unknown")
+            nullable = "是" if col.get("nullable", True) else "否"
+            lines.append(f"| {col_name} | {col_type} | {nullable} |")
+
+        return "\n".join(lines)
+
+    # 数据库类型使用原有逻辑
     url = db_service.get_database_url(
         ctx["db_type"],
         ctx["host"],
@@ -457,6 +506,18 @@ async def run_sql(
     if ctx is None:
         return {"success": False, "error": "未找到数据库连接上下文"}
 
+    # 文件类型使用 DuckDB
+    if ctx["db_type"] == "file":
+        from app.services.file_datasource_service import FileDatasourceService
+        service = FileDatasourceService()
+        result = await service.execute_query(
+            datasource_id=ctx["datasource_id"],
+            sql=sql,
+            max_rows=limit,
+        )
+        return result
+
+    # 数据库类型使用原有逻辑
     result = await db_service.execute_query(
         db_type=ctx["db_type"],
         host=ctx["host"],
@@ -537,10 +598,17 @@ def render_chart(
 
     # 生成 ECharts 配置
     if chart_type == "pie":
+        # 如果没有指定 x_field，自动推断（取第一个非 y_field 的字段）
+        if not x_field and data:
+            for key in data[0].keys():
+                if key != y_field:
+                    x_field = key
+                    break
+
         pie_data = []
         for i, item in enumerate(data):
             pie_data.append({
-                "name": item.get(x_field or f"项{i}"),
+                "name": item.get(x_field) if x_field else f"项{i+1}",
                 "value": item.get(y_field or series_name, 0)
             })
 
@@ -929,21 +997,23 @@ def generate_session_title(user_message: str) -> str:
 async def process_query_stream(
     datasource_id: str,
     db_type: str,
-    host: str,
-    port: int,
-    database: str,
-    username: str,
-    password: str,
-    schema_name: Optional[str],
-    query: str,
-    context: dict,
-    history: list[dict],
+    host: str = None,
+    port: int = None,
+    database: str = None,
+    username: str = None,
+    password: str = None,
+    schema_name: Optional[str] = None,
+    tables_info: Optional[List[dict]] = None,
+    query: str = None,
+    context: dict = None,
+    history: list[dict] = None,
     session_id: str = None,  # 新增：使用 session_id 作为 thread_id
 ) -> AsyncGenerator[dict, None]:
     """流式处理用户查询 - v3.0 生产环境重构
 
     使用 session_id 作为 thread_id，实现状态持久化。
     使用原生异步流式 API，避免线程与协程混合。
+    支持 file 类型数据源（DuckDB）。
     """
 
     import logging
@@ -967,6 +1037,7 @@ async def process_query_stream(
         username=username,
         password=password,
         schema_name=schema_name,
+        tables_info=tables_info,
     )
 
     # 发送思考事件

@@ -38,31 +38,36 @@ class DataSourceService:
         self,
         name: str,
         type: str,
-        host: str,
-        port: int,
-        database: str,
-        username: str,
-        password: str,
+        host: str = None,
+        port: int = None,
+        database: str = None,
+        username: str = None,
+        password: str = None,
         schema_name: Optional[str] = None,
+        file_path: Optional[str] = None,
+        tables_info: Optional[List[dict]] = None,
+        datasource_id: Optional[str] = None,
     ) -> DataSource:
         """创建数据源"""
-        # 测试连接
-        conn_result = await test_database_connection(
-            db_type=type,
-            host=host,
-            port=port,
-            database=database,
-            username=username,
-            password=password,
-            schema_name=schema_name,
-        )
+        # 文件类型不需要测试连接
+        if type != "file":
+            # 测试连接
+            conn_result = await test_database_connection(
+                db_type=type,
+                host=host,
+                port=port,
+                database=database,
+                username=username,
+                password=password,
+                schema_name=schema_name,
+            )
 
-        if not conn_result["success"]:
-            raise ValueError(f"连接测试失败：{conn_result['message']}")
+            if not conn_result["success"]:
+                raise ValueError(f"连接测试失败：{conn_result['message']}")
 
-        # 创建数据源
+        # 创建数据源（使用传入的 ID 或生成新的）
         datasource = DataSource(
-            id=str(uuid.uuid4()),
+            id=datasource_id or str(uuid.uuid4()),
             user_id=self.user_id,
             name=name,
             type=type,
@@ -72,6 +77,8 @@ class DataSourceService:
             db_username=username,
             db_password=password,  # V3.0 暂不加密
             schema_name=schema_name,
+            file_path=file_path,
+            tables_info=tables_info,
             status=1,
         )
 
@@ -90,14 +97,16 @@ class DataSourceService:
         username: Optional[str] = None,
         password: Optional[str] = None,
         schema_name: Optional[str] = None,
+        file_path: Optional[str] = None,
+        tables_info: Optional[List[dict]] = None,
     ) -> Optional[DataSource]:
         """更新数据源"""
         datasource = await self.get_datasource(datasource_id)
         if not datasource:
             return None
 
-        # 测试新连接（如果有修改连接信息）
-        if host or port or database or username or password:
+        # 测试新连接（如果有修改连接信息，且不是文件类型）
+        if datasource.type != "file" and (host or port or database or username or password):
             conn_result = await test_database_connection(
                 db_type=datasource.type,
                 host=host or datasource.host,
@@ -125,6 +134,10 @@ class DataSourceService:
             datasource.db_password = password
         if schema_name is not None:
             datasource.schema_name = schema_name
+        if file_path is not None:
+            datasource.file_path = file_path
+        if tables_info is not None:
+            datasource.tables_info = tables_info
 
         await self.db.flush()
         return datasource
@@ -134,6 +147,12 @@ class DataSourceService:
         datasource = await self.get_datasource(datasource_id)
         if not datasource:
             return False
+
+        # 如果是文件类型，清理文件
+        if datasource.type == "file":
+            from app.services.file_datasource_service import FileDatasourceService
+            service = FileDatasourceService()
+            await service.cleanup_datasource_files(datasource_id)
 
         await self.db.delete(datasource)
         await self.db.flush()
@@ -145,7 +164,7 @@ class DataSourceService:
         if not datasource:
             return None
 
-        return {
+        result = {
             "type": datasource.type,
             "host": datasource.host,
             "port": datasource.port,
@@ -154,6 +173,12 @@ class DataSourceService:
             "password": datasource.db_password,
             "schema_name": datasource.schema_name,
         }
+
+        # 文件类型添加 tables_info
+        if datasource.type == "file":
+            result["tables_info"] = datasource.tables_info
+
+        return result
 
 
 # ==================== 便捷函数（兼容旧接口） ====================

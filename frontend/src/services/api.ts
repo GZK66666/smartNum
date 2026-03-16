@@ -124,6 +124,75 @@ export const datasourceApi = {
     const res = await request<ApiResponse<{ tables: { name: string; columns: { name: string; type: string }[] }[] }>>(`/api/datasources/${id}/schema`)
     return res.data!
   },
+
+  // File upload
+  uploadFile: async (name: string, file: File): Promise<{
+    id: string
+    name: string
+    type: string
+    status: string
+    tables: { name: string; columns: { name: string; type: string }[]; row_count: number }[]
+    preview: { columns: string[]; data: unknown[][]; total_rows: number }
+    created_at: string
+  }> => {
+    const token = localStorage.getItem('token')
+    const formData = new FormData()
+    formData.append('name', name)
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE}/api/datasources/upload`, {
+      method: 'POST',
+      headers: {
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+      body: formData,
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      const error = data.detail || data
+      throw new ApiError(
+        error.code || response.status,
+        error.message || '上传失败',
+        response.status
+      )
+    }
+
+    return data.data
+  },
+
+  previewFile: async (file: File): Promise<{
+    filename: string
+    columns: string[]
+    data: unknown[][]
+    total_rows: number
+  }> => {
+    const token = localStorage.getItem('token')
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE}/api/datasources/upload/preview`, {
+      method: 'POST',
+      headers: {
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+      body: formData,
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      const error = data.detail || data
+      throw new ApiError(
+        error.code || response.status,
+        error.message || '预览失败',
+        response.status
+      )
+    }
+
+    return data.data
+  },
 }
 
 // Session API
