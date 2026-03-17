@@ -11,13 +11,25 @@ import {
   CheckCircle2,
   XCircle,
   ChevronRight,
+  Edit,
 } from 'lucide-react'
 import { datasourceApi } from '../services/api'
 import type { DataSource } from '../types'
+import EditDataSourceDrawer from '../components/EditDataSourceDrawer'
 
 export default function DataSourcePage() {
   const queryClient = useQueryClient()
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [editingDatasource, setEditingDatasource] = useState<{
+    id: string
+    name: string
+    type: string
+    host?: string
+    port?: number
+    database_name?: string
+    db_username?: string
+    schema_name?: string
+  } | null>(null)
 
   const { data: datasources = [], isLoading } = useQuery({
     queryKey: ['datasources'],
@@ -111,14 +123,23 @@ export default function DataSourcePage() {
                 transition={{ delay: index * 0.1 }}
                 className="glass-card-hover p-6 group relative"
               >
-                {/* Delete Button */}
-                <button
-                  onClick={() => setDeleteId(ds.id)}
-                  className="absolute top-4 right-4 p-2 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                  title="删除"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                {/* Action Buttons */}
+                <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                  <button
+                    onClick={() => setEditingDatasource(ds)}
+                    className="p-2 text-gray-500 hover:text-accent-primary hover:bg-accent-primary/10 rounded-lg transition-all"
+                    title="编辑"
+                  >
+                    <Edit className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setDeleteId(ds.id)}
+                    className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all"
+                    title="删除"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
 
                 {/* Icon */}
                 <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${getTypeColor(ds.type)} flex items-center justify-center mb-4 text-2xl`}>
@@ -183,6 +204,14 @@ export default function DataSourcePage() {
           </Link>
         </motion.div>
       )}
+
+      {/* Edit DataSource Drawer */}
+      <EditDataSourceDrawer
+        isOpen={!!editingDatasource}
+        onClose={() => setEditingDatasource(null)}
+        datasource={editingDatasource}
+        onUpdate={() => queryClient.invalidateQueries({ queryKey: ['datasources'] })}
+      />
 
       {/* Delete Confirmation Modal */}
       <AnimatePresence>

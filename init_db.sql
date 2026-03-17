@@ -57,6 +57,7 @@ CREATE TABLE datasources (
     schema_name VARCHAR(100) COMMENT 'Schema 名称 (PostgreSQL)',
     file_path VARCHAR(500) COMMENT '原始文件路径（文件类型）',
     tables_info JSON COMMENT '转换后的表信息（文件类型）',
+    query_guide_updated_at DATETIME COMMENT '查询指南最后更新时间',
     status TINYINT DEFAULT 1 COMMENT '状态：1-正常 0-禁用',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',

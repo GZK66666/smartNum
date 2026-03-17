@@ -161,20 +161,17 @@ class DoneEvent(SSEEvent):
 
 SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分析数据库中的数据。
 
-## 知识库
+## 查询指南
 
-系统中有一个知识库，存储了用户上传的业务文档，可能包含但不限于：
-- 数据字典和字段说明
-- 业务规则和注意事项
-- 常用查询的写法参考
-
-当不确定业务逻辑时，最好先查阅知识库。
+每个数据源可能有查询指南文档，包含表说明、业务规则、SQL参考等。
+在查询数据前，建议先查阅查询指南：`explore_query_guide("ls -la")`
+不确定业务逻辑时，务必查阅查询指南。
 
 ## 工具
 
-### explore_knowledge
-探索知识库文件。使用 shell 命令查看内容。
-示例：`ls -la` 列出文件，`cat *.txt` 查看内容，`grep "关键词" .` 搜索
+### explore_query_guide
+浏览查询指南文档。使用 shell 命令查看内容。
+示例：`ls -la` 列出文件，`cat *.md` 查看内容，`grep "关键词" .` 搜索
 
 ### list_tables
 列出数据库中的表。
@@ -880,21 +877,21 @@ async def cleanup_expired_export_files() -> int:
         return result.rowcount
 
 
-# ==================== 知识库工具 ====================
+# ==================== 查询指南工具 ====================
 
 @tool
-async def explore_knowledge(
+async def explore_query_guide(
     command: str,
 ) -> str:
-    """浏览知识库中的业务文档。
+    """浏览查询指南文档。
 
-    知识库存储了用户上传的业务规则、数据字典、注意事项等文档。
-    在查询数据前，可以浏览知识库了解业务背景，避免遗漏重要规则。
+    查询指南包含该数据源的业务规则、数据字典、SQL参考等。
+    在查询数据前，建议先查阅查询指南。
 
     常用命令:
-    - ls -la : 查看有哪些知识文件
-    - cat *.txt : 阅读所有文件内容
-    - grep "关键词" *.txt : 搜索特定内容
+    - ls -la : 查看有哪些文档
+    - cat *.md : 阅读所有文档
+    - grep "关键词" *.md : 搜索特定内容
 
     Args:
         command: 要执行的 shell 命令 (支持: ls, cat, grep, head, tail, wc, find)
@@ -903,12 +900,11 @@ async def explore_knowledge(
         命令执行结果
 
     Examples:
-        explore_knowledge("ls -la")  # 列出所有知识文件
-        explore_knowledge("cat *.txt")  # 阅读全部内容
-        explore_knowledge("grep -i '用户' *.txt")  # 搜索用户相关规则
+        explore_query_guide("ls -la")  # 列出所有文档
+        explore_query_guide("cat *.md")  # 阅读全部内容
+        explore_query_guide("grep -i '用户' *.md")  # 搜索用户相关内容
     """
-    from app.services.knowledge_service import KnowledgeService
-    from app.models.database import async_session_maker
+    from app.services.query_guide_service import QueryGuideService
 
     ctx = get_db_context()
     if ctx is None:
@@ -918,13 +914,12 @@ async def explore_knowledge(
     if not datasource_id:
         return "错误: 未找到数据源ID"
 
-    async with async_session_maker() as session:
-        service = KnowledgeService(session)
-        output = service.explore_knowledge(
-            datasource_id=datasource_id,
-            command=command,
-        )
-        return output
+    service = QueryGuideService()
+    output = service.explore_guide(
+        datasource_id=datasource_id,
+        command=command,
+    )
+    return output
 
 
 # ==================== DeepAgent 创建 ====================
@@ -965,7 +960,7 @@ async def get_agent():
         model=llm,
         tools=[
             list_tables, get_table_schema, run_sql, render_chart, export_data,
-            explore_knowledge,
+            explore_query_guide,
         ],
         system_prompt=SYSTEM_PROMPT,
         checkpointer=_checkpointer,

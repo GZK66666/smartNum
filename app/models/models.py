@@ -50,6 +50,8 @@ class DataSource(Base):
     # 文件数据源字段
     file_path = Column(VARCHAR(500), comment="原始文件路径（文件类型）")
     tables_info = Column(JSON, comment="转换后的表信息（文件类型）")
+    # 查询指南
+    query_guide_updated_at = Column(DateTime, comment="查询指南最后更新时间")
     status = Column(Integer, default=1, comment="状态：1-正常 0-禁用")
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
