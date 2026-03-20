@@ -165,8 +165,7 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分
 
 ### explore_query_guide
 使用 shell 命令浏览**当前数据源**的查询指南文档（ls, cat, grep 等）。
-查询指南包含数据库的业务说明、统计口径、表字段说明等查询参考信息。
-命令会自动在当前数据源绑定的目录下执行，无需指定路径。
+查询指南是一个文件夹，包含多个文档（文档内容可能涵盖业务说明、统计口径、表字段说明等），命令会自动在当前数据源的查询指南文件夹下执行。
 
 ### list_tables
 列出数据库中的表。
@@ -878,22 +877,26 @@ async def cleanup_expired_export_files() -> int:
 async def explore_query_guide(
     command: str,
 ) -> str:
-    """使用 shell 命令浏览当前数据源的查询指南文档。
+    """使用 shell 命令查阅当前数据源的查询指南文件夹。
 
-    查询指南位于当前数据源绑定的目录下，包含业务说明、统计口径、表字段说明等参考信息。
-    你可以使用任何 shell 文件系统命令来探索文件内容，命令会在当前数据源的查询指南目录中执行。
+    查询指南是一个文件夹，里面包含多个文档文件：
+    - notes.md - 人工编写的备注说明
+    - uploaded/* - 上传的参考文档
+
+    你可以像探索普通文件夹一样，使用 ls 查看有哪些文件，用 cat 阅读内容，用 grep 搜索关键词等。
 
     Args:
-        command: 要执行的 shell 文件系统命令（自动在当前数据源的查询指南目录执行）
+        command: 要执行的 shell 命令（自动在当前数据源的查询指南文件夹下执行）
 
     Returns:
         命令执行结果
 
     Examples:
-        explore_query_guide("ls -la")  # 列出当前数据源的所有查询指南文档
-        explore_query_guide("cat *.md")  # 阅读所有 markdown 文档
-        explore_query_guide("grep -i '用户' . -r")  # 搜索用户相关内容
-        explore_query_guide("head -50 notes.md")  # 查看备注文件前 50 行
+        explore_query_guide("ls -la")  # 查看查询指南文件夹中有哪些文档
+        explore_query_guide("ls uploaded/")  # 查看上传了哪些文档
+        explore_query_guide("cat notes.md")  # 阅读备注说明
+        explore_query_guide("grep -r '活跃用户' .")  # 搜索所有文档中关于"活跃用户"的定义
+        explore_query_guide("head -30 uploaded/业务说明.md")  # 查看某个文档的前 30 行
     """
     from app.services.query_guide_service import QueryGuideService
 
