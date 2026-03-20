@@ -56,7 +56,7 @@ export const knowledgeApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '获取知识文件列表失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '获取知识文件列表失败', response.status)
     }
 
     const data = await response.json()
@@ -98,7 +98,7 @@ export const knowledgeApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '上传失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '上传失败', response.status)
     }
 
     const data = await response.json()
@@ -118,7 +118,7 @@ export const knowledgeApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '获取文件信息失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '获取文件信息失败', response.status)
     }
 
     const data = await response.json()
@@ -138,7 +138,7 @@ export const knowledgeApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '获取文件内容失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '获取文件内容失败', response.status)
     }
 
     return response.text()
@@ -158,7 +158,7 @@ export const knowledgeApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '删除失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '删除失败', response.status)
     }
   },
 
@@ -167,7 +167,6 @@ export const knowledgeApi = {
    */
   async search(
     query: string,
-    datasourceId?: string,
     limit: number = 10
   ): Promise<KnowledgeSearchResult[]> {
     const response = await fetch(
@@ -181,7 +180,7 @@ export const knowledgeApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '搜索失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '搜索失败', response.status)
     }
 
     const data = await response.json()
@@ -206,7 +205,7 @@ export const knowledgeApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '探索失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '探索失败', response.status)
     }
 
     const data = await response.json()
@@ -229,7 +228,7 @@ export const knowledgeApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '获取结构失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '获取结构失败', response.status)
     }
 
     const data = await response.json()
@@ -249,7 +248,7 @@ export const ragflowApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '获取文件列表失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '获取文件列表失败', response.status)
     }
 
     const data = await response.json()
@@ -259,7 +258,7 @@ export const ragflowApi = {
   /**
    * 上传文件到 RAGFLOW
    */
-  async uploadFile(file: File, onProgress?: (progress: number) => Promise<void>): Promise<RagflowDocument> {
+  async uploadFile(file: File): Promise<RagflowDocument> {
     const formData = new FormData()
     formData.append('file', file)
 
@@ -272,7 +271,7 @@ export const ragflowApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '上传失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '上传失败', response.status)
     }
 
     const data = await response.json()
@@ -289,7 +288,7 @@ export const ragflowApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '获取状态失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '获取状态失败', response.status)
     }
 
     const data = await response.json()
@@ -307,7 +306,7 @@ export const ragflowApi = {
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '删除失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '删除失败', response.status)
     }
   },
 
@@ -318,12 +317,12 @@ export const ragflowApi = {
     const response = await fetch(`${API_BASE}/api/ragflow/files/parse`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ doc_ids: docIds }),
+      body: JSON.stringify(docIds),
     })
 
     if (!response.ok) {
       const data = await response.json()
-      throw new ApiError(data.detail?.message || '解析失败', response.status)
+      throw new ApiError(data.detail?.code || response.status, data.detail?.message || '解析失败', response.status)
     }
   },
 }

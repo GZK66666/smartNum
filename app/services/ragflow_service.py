@@ -56,12 +56,14 @@ class RagflowService:
         try:
             client = await self._get_client()
 
+            # 根据 RAGFlow 0.19.1 API，使用检索 API
             response = await client.post(
-                f"/api/v1/knowledge_base/{self.kb_id}/chunks",
+                "/api/v1/retrieval",
                 json={
-                    "query": query,
+                    "dataset_ids": [self.kb_id],
+                    "question": query,
                     "top_k": top_k or self.top_k,
-                    "score_threshold": score_threshold or self.score_threshold,
+                    "similarity_threshold": score_threshold or self.score_threshold,
                 },
             )
 
@@ -116,15 +118,17 @@ class RagflowService:
         try:
             client = await self._get_client()
 
+            # 根据 RAGFlow API 文档，使用 datasets API
             response = await client.get(
-                f"/api/v1/knowledge_base/{self.kb_id}/documents"
+                f"/api/v1/datasets/{self.kb_id}/documents?page=1&page_size=100"
             )
 
             if response.status_code == 200:
                 data = response.json()
                 if data.get("code") == 0:
-                    documents = data.get("data", {}).get("documents", [])
-                    return {"success": True, "documents": documents}
+                    # API 返回的是 docs 数组
+                    docs = data.get("data", {}).get("docs", [])
+                    return {"success": True, "documents": docs}
                 else:
                     return {
                         "success": False,
@@ -142,7 +146,7 @@ class RagflowService:
             return {"success": False, "error": f"RAGFLOW 连接失败：{str(e)}"}
         except Exception as e:
             logger.exception(f"RAGFLOW 获取文件列表异常：{e}")
-            return {"success": False, "error": f"RAGFLOW 获取文件列表失败：{str(e)}"}
+            return {"success": False, "error": "RAGFLOW 获取文件列表失败：{str(e)}"}
 
     async def upload_file(self, file_content: bytes, filename: str) -> Dict[str, Any]:
         """
@@ -164,22 +168,23 @@ class RagflowService:
         try:
             client = await self._get_client()
 
-            # 使用 multipart/form-data 上传
+            # 根据 RAGFlow API 文档，使用 datasets/{dataset_id}/documents/upload
             files = {"file": (filename, file_content)}
             response = await client.post(
-                f"/api/v1/knowledge_base/{self.kb_id}/documents/upload",
+                f"/api/v1/datasets/{self.kb_id}/documents",
                 files=files,
             )
 
             if response.status_code == 200:
                 data = response.json()
                 if data.get("code") == 0:
-                    result = data.get("data", {})
+                    # 返回的是数组，取第一个
+                    result = data.get("data", [])[0] if data.get("data") else {}
                     return {
                         "success": True,
                         "doc_id": result.get("id"),
                         "name": result.get("name"),
-                        "status": result.get("status"),
+                        "status": result.get("run", "UNSTART"),
                     }
                 else:
                     return {
@@ -219,22 +224,31 @@ class RagflowService:
         try:
             client = await self._get_client()
 
+            # 根据 RAGFlow API 文档，从 list API 获取文档列表，然后查找指定 ID 的文档
             response = await client.get(
-                f"/api/v1/knowledge_base/{self.kb_id}/documents/{doc_id}"
+                f"/api/v1/datasets/{self.kb_id}/documents?page=1&page_size=100&id={doc_id}"
             )
 
             if response.status_code == 200:
                 data = response.json()
                 if data.get("code") == 0:
-                    file_info = data.get("data", {})
-                    return {
-                        "success": True,
-                        "doc_id": file_info.get("id"),
-                        "name": file_info.get("name"),
-                        "status": file_info.get("status"),
-                        "progress": file_info.get("progress"),
-                        "chunk_count": file_info.get("chunk_count"),
-                    }
+                    docs = data.get("data", {}).get("docs", [])
+                    if docs:
+                        file_info = docs[0]
+                        return {
+                            "success": True,
+                            "doc_id": file_info.get("id"),
+                            "name": file_info.get("name"),
+                            "status": file_info.get("run"),  # UNSTART, RUNNING, DONE, FAIL
+                            "progress": file_info.get("progress", 0),
+                            "chunk_count": file_info.get("chunk_count", 0),
+                            "created_at": file_info.get("create_date"),
+                        }
+                    else:
+                        return {
+                            "success": False,
+                            "error": "文件不存在",
+                        }
                 else:
                     return {
                         "success": False,
@@ -273,8 +287,11 @@ class RagflowService:
         try:
             client = await self._get_client()
 
+            # 根据 RAGFlow API 文档，使用 DELETE /api/v1/datasets/{dataset_id}/documents
+            # 需要传递 ids 数组
             response = await client.delete(
-                f"/api/v1/knowledge_base/{self.kb_id}/documents/{doc_id}"
+                f"/api/v1/datasets/{self.kb_id}/documents",
+                json={"ids": [doc_id]},
             )
 
             if response.status_code == 200:
@@ -322,8 +339,9 @@ class RagflowService:
         try:
             client = await self._get_client()
 
+            # 根据 RAGFlow API 文档，body 是 {"document_ids": [...]} 格式
             response = await client.post(
-                f"/api/v1/knowledge_base/{self.kb_id}/documents/parse",
+                f"/api/v1/datasets/{self.kb_id}/chunks",
                 json={"document_ids": doc_ids},
             )
 

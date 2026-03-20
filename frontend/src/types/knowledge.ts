@@ -36,7 +36,7 @@ export interface RagflowDocument {
   type: string  // pdf, docx, md, txt 等
   size: number
   chunk_count: number
-  status: 'parsing' | 'ready' | 'failed'
+  status: 'pending' | 'parsing' | 'ready' | 'failed'  // pending: 等待解析
   progress: number  // 0-1 之间
   created_at: string
 }

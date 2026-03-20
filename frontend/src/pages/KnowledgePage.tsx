@@ -1,25 +1,19 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Upload,
   FileText,
-  File,
   Trash2,
   Eye,
   X,
   Loader2,
-  CheckCircle2,
-  AlertCircle,
   FolderOpen,
   Search,
   ChevronRight,
-  Database,
   Clock,
-  HardDrive,
-  ChevronDown,
   RefreshCw,
+  Play,
 } from 'lucide-react'
 import { ragflowApi } from '../services/knowledgeApi'
 import type { RagflowDocument } from '../types/knowledge'
@@ -126,6 +120,8 @@ export default function KnowledgePage() {
 
   const getStatusText = (status: string) => {
     switch (status) {
+      case 'pending':
+        return '等待解析'
       case 'parsing':
         return '解析中'
       case 'ready':
@@ -139,6 +135,8 @@ export default function KnowledgePage() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
+      case 'pending':
+        return 'text-gray-400'
       case 'parsing':
         return 'text-yellow-400'
       case 'ready':
@@ -152,6 +150,8 @@ export default function KnowledgePage() {
 
   const getStatusBg = (status: string) => {
     switch (status) {
+      case 'pending':
+        return 'bg-gray-400/20 text-gray-400'
       case 'parsing':
         return 'bg-yellow-400/20 text-yellow-400'
       case 'ready':
@@ -281,7 +281,7 @@ export default function KnowledgePage() {
       </motion.div>
 
       {/* 统计信息 */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-4 gap-4 mb-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -297,6 +297,17 @@ export default function KnowledgePage() {
           transition={{ delay: 0.35 }}
           className="glass-card p-4"
         >
+          <div className="text-gray-400 text-sm mb-1">等待解析</div>
+          <div className="text-2xl font-bold text-gray-400">
+            {files.filter(f => f.status === 'pending').length}
+          </div>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="glass-card p-4"
+        >
           <div className="text-gray-400 text-sm mb-1">解析中</div>
           <div className="text-2xl font-bold text-yellow-400">
             {files.filter(f => f.status === 'parsing').length}
@@ -305,7 +316,7 @@ export default function KnowledgePage() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
+          transition={{ delay: 0.45 }}
           className="glass-card p-4"
         >
           <div className="text-gray-400 text-sm mb-1">已完成</div>
@@ -370,6 +381,15 @@ export default function KnowledgePage() {
                   >
                     <Eye className="w-4 h-4" />
                   </button>
+                  {file.status === 'pending' && (
+                    <button
+                      onClick={() => parseMutation.mutate([file.id])}
+                      className="p-2 text-gray-500 hover:text-green-400 hover:bg-green-400/10 rounded-lg transition-colors"
+                      title="开始解析"
+                    >
+                      <Play className="w-4 h-4" />
+                    </button>
+                  )}
                   <button
                     onClick={() => setDeleteId(file.id)}
                     className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
@@ -395,6 +415,23 @@ export default function KnowledgePage() {
                 </div>
 
                 {/* 状态和进度 */}
+                {file.status === 'pending' && (
+                  <div className="mt-3">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-1 text-xs bg-gray-400/20 text-gray-400 rounded">
+                        等待解析
+                      </span>
+                      <button
+                        onClick={() => parseMutation.mutate([file.id])}
+                        className="ml-auto px-3 py-1 text-xs bg-accent-primary/20 text-accent-primary rounded hover:bg-accent-primary/30 transition-colors flex items-center gap-1"
+                      >
+                        <Play className="w-3 h-3" />
+                        开始解析
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {file.status === 'parsing' && (
                   <div className="mt-3">
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -524,6 +561,19 @@ export default function KnowledgePage() {
                     <span className="text-white text-sm">{formatDate(previewFile.created_at)}</span>
                   </div>
                 </div>
+
+                {previewFile.status === 'pending' && (
+                  <button
+                    onClick={() => {
+                      parseMutation.mutate([previewFile.id])
+                      setPreviewFile(null)
+                    }}
+                    className="w-full mt-4 px-4 py-2 bg-accent-primary/20 border border-accent-primary/30 text-accent-primary font-medium rounded-xl hover:bg-accent-primary/30 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Play className="w-4 h-4" />
+                    开始解析
+                  </button>
+                )}
 
                 {previewFile.status === 'failed' && (
                   <button
