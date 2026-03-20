@@ -1,4 +1,5 @@
 import { ApiError } from './api'
+import type { RagflowDocument } from '../types/knowledge'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
@@ -233,5 +234,96 @@ export const knowledgeApi = {
 
     const data = await response.json()
     return data.data.structure
+  },
+}
+
+// RAGFLOW 文件管理 API
+export const ragflowApi = {
+  /**
+   * 获取 RAGFLOW 知识库文件列表
+   */
+  async listFiles(): Promise<RagflowDocument[]> {
+    const response = await fetch(`${API_BASE}/api/ragflow/files`, {
+      headers: getAuthHeaders(),
+    })
+
+    if (!response.ok) {
+      const data = await response.json()
+      throw new ApiError(data.detail?.message || '获取文件列表失败', response.status)
+    }
+
+    const data = await response.json()
+    return data.data
+  },
+
+  /**
+   * 上传文件到 RAGFLOW
+   */
+  async uploadFile(file: File, onProgress?: (progress: number) => Promise<void>): Promise<RagflowDocument> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const token = localStorage.getItem('token')
+    const response = await fetch(`${API_BASE}/api/ragflow/files/upload`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const data = await response.json()
+      throw new ApiError(data.detail?.message || '上传失败', response.status)
+    }
+
+    const data = await response.json()
+    return data.data
+  },
+
+  /**
+   * 获取文件解析状态和进度
+   */
+  async getFileStatus(docId: string): Promise<RagflowDocument> {
+    const response = await fetch(`${API_BASE}/api/ragflow/files/${docId}`, {
+      headers: getAuthHeaders(),
+    })
+
+    if (!response.ok) {
+      const data = await response.json()
+      throw new ApiError(data.detail?.message || '获取状态失败', response.status)
+    }
+
+    const data = await response.json()
+    return data.data
+  },
+
+  /**
+   * 删除 RAGFLOW 文件
+   */
+  async deleteFile(docId: string): Promise<void> {
+    const response = await fetch(`${API_BASE}/api/ragflow/files/${docId}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    })
+
+    if (!response.ok) {
+      const data = await response.json()
+      throw new ApiError(data.detail?.message || '删除失败', response.status)
+    }
+  },
+
+  /**
+   * 触发文件解析
+   */
+  async parseFiles(docIds: string[]): Promise<void> {
+    const response = await fetch(`${API_BASE}/api/ragflow/files/parse`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ doc_ids: docIds }),
+    })
+
+    if (!response.ok) {
+      const data = await response.json()
+      throw new ApiError(data.detail?.message || '解析失败', response.status)
+    }
   },
 }

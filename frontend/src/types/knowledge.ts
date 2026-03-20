@@ -28,3 +28,15 @@ export interface KnowledgeSearchResult {
 
 export type KnowledgeCategory = 'raw' | 'curated'
 export type KnowledgeSubCategory = 'indicators' | 'rules' | 'datasets' | 'glossary' | null
+
+// RAGFLOW 文档类型
+export interface RagflowDocument {
+  id: string
+  name: string
+  type: string  // pdf, docx, md, txt 等
+  size: number
+  chunk_count: number
+  status: 'parsing' | 'ready' | 'failed'
+  progress: number  // 0-1 之间
+  created_at: string
+}
