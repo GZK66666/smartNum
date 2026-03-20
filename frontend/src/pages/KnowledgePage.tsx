@@ -19,64 +19,27 @@ import {
   Clock,
   HardDrive,
   ChevronDown,
+  RefreshCw,
 } from 'lucide-react'
-import { knowledgeApi } from '../services/knowledgeApi'
-import { datasourceApi } from '../services/api'
-import type { KnowledgeFile } from '../types/knowledge'
+import { ragflowApi } from '../services/knowledgeApi'
+import type { RagflowDocument } from '../types/knowledge'
 
 export default function KnowledgePage() {
   const queryClient = useQueryClient()
-  const [selectedDatasource, setSelectedDatasource] = useState<string | null>(null)
-  const [previewFile, setPreviewFile] = useState<KnowledgeFile | null>(null)
-  const [previewContent, setPreviewContent] = useState<string>('')
+  const [previewFile, setPreviewFile] = useState<RagflowDocument | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [isDragging, setIsDragging] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({})
-  const [isSelectOpen, setIsSelectOpen] = useState(false)
-  const selectRef = useRef<HTMLDivElement>(null)
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (selectRef.current && !selectRef.current.contains(event.target as Node)) {
-        setIsSelectOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
-  // Fetch datasources for selector
-  const { data: datasources = [] } = useQuery({
-    queryKey: ['datasources'],
-    queryFn: datasourceApi.list,
+  // 获取 RAGFLOW 文件列表 - 每 5 秒轮询一次，更新解析进度
+  const { data: files = [], isLoading, refetch } = useQuery({
+    queryKey: ['ragflow-files'],
+    queryFn: ragflowApi.listFiles,
+    refetchInterval: 5000,
   })
 
-  // Auto-select first datasource if none selected
-  useEffect(() => {
-    if (!selectedDatasource && datasources.length > 0) {
-      setSelectedDatasource(datasources[0].id)
-    }
-  }, [datasources, selectedDatasource])
-
-  // Fetch knowledge files
-  const { data: files = [], isLoading } = useQuery({
-    queryKey: ['knowledge-files', selectedDatasource],
-    queryFn: () => knowledgeApi.list(selectedDatasource || undefined),
-    enabled: !!selectedDatasource,
-  })
-
-  // Delete mutation
-  const deleteMutation = useMutation({
-    mutationFn: knowledgeApi.delete,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['knowledge-files'] })
-      setDeleteId(null)
-    },
-  })
-
-  // Handle file upload
+  // 上传处理
   const handleUpload = useCallback(async (files: FileList | File[]) => {
     const fileArray = Array.from(files)
     const allowedTypes = ['.txt', '.md', '.docx', '.pdf']
@@ -84,26 +47,20 @@ export default function KnowledgePage() {
     for (const file of fileArray) {
       const ext = '.' + file.name.split('.').pop()?.toLowerCase()
       if (!allowedTypes.includes(ext)) {
-        alert(`不支持的文件格式: ${ext}`)
+        alert(`不支持的文件格式：${ext}`)
         continue
       }
 
       setUploadProgress(prev => ({ ...prev, [file.name]: 0 }))
 
       try {
-        await knowledgeApi.upload(
-          file,
-          selectedDatasource || undefined,
-          'raw',
-          undefined,
-          undefined,
-          undefined,
-          undefined
-        )
-        queryClient.invalidateQueries({ queryKey: ['knowledge-files'] })
+        await ragflowApi.uploadFile(file, async (progress) => {
+          setUploadProgress(prev => ({ ...prev, [file.name]: progress }))
+        })
+        queryClient.invalidateQueries({ queryKey: ['ragflow-files'] })
       } catch (error) {
         console.error('Upload failed:', error)
-        alert(`上传失败: ${file.name}`)
+        alert(`上传失败：${file.name}`)
       } finally {
         setUploadProgress(prev => {
           const next = { ...prev }
@@ -112,9 +69,26 @@ export default function KnowledgePage() {
         })
       }
     }
-  }, [selectedDatasource, queryClient])
+  }, [queryClient])
 
-  // Handle drag events
+  // 删除处理
+  const deleteMutation = useMutation({
+    mutationFn: ragflowApi.deleteFile,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ragflow-files'] })
+      setDeleteId(null)
+    },
+  })
+
+  // 解析文件
+  const parseMutation = useMutation({
+    mutationFn: (docIds: string[]) => ragflowApi.parseFiles(docIds),
+    onSuccess: () => {
+      refetch()
+    },
+  })
+
+  // 处理拖拽事件
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(true)
@@ -133,40 +107,13 @@ export default function KnowledgePage() {
     }
   }, [handleUpload])
 
-  // Handle preview
-  const handlePreview = async (file: KnowledgeFile) => {
-    setPreviewFile(file)
-    setPreviewContent('加载中...')
-    try {
-      const content = await knowledgeApi.getContent(file.id)
-      setPreviewContent(content)
-    } catch {
-      setPreviewContent('无法加载文件内容')
-    }
-  }
-
-  // Get file type icon
-  const getFileIcon = (type: string) => {
-    switch (type) {
-      case '.pdf':
-        return <File className="w-5 h-5 text-red-400" />
-      case '.docx':
-        return <FileText className="w-5 h-5 text-blue-400" />
-      case '.md':
-        return <FileText className="w-5 h-5 text-purple-400" />
-      default:
-        return <FileText className="w-5 h-5 text-gray-400" />
-    }
-  }
-
-  // Format file size
+  // 格式化函数
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
-  // Format date
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleString('zh-CN', {
       year: 'numeric',
@@ -177,10 +124,66 @@ export default function KnowledgePage() {
     })
   }
 
-  // Filter files by search
-  const filteredFiles = files.filter((file: KnowledgeFile) =>
-    file.filename.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    file.title?.toLowerCase().includes(searchQuery.toLowerCase())
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'parsing':
+        return '解析中'
+      case 'ready':
+        return '已完成'
+      case 'failed':
+        return '解析失败'
+      default:
+        return status
+    }
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'parsing':
+        return 'text-yellow-400'
+      case 'ready':
+        return 'text-green-400'
+      case 'failed':
+        return 'text-red-400'
+      default:
+        return 'text-gray-400'
+    }
+  }
+
+  const getStatusBg = (status: string) => {
+    switch (status) {
+      case 'parsing':
+        return 'bg-yellow-400/20 text-yellow-400'
+      case 'ready':
+        return 'bg-green-400/20 text-green-400'
+      case 'failed':
+        return 'bg-red-400/20 text-red-400'
+      default:
+        return 'bg-white/10 text-gray-400'
+    }
+  }
+
+  // 获取文件类型图标
+  const getFileIcon = (type: string) => {
+    switch (type.toLowerCase()) {
+      case 'pdf':
+        return <File className="w-5 h-5 text-red-400" />
+      case 'docx':
+      case 'doc':
+        return <FileText className="w-5 h-5 text-blue-400" />
+      case 'md':
+      case 'markdown':
+        return <FileText className="w-5 h-5 text-purple-400" />
+      case 'txt':
+        return <FileText className="w-5 h-5 text-gray-400" />
+      default:
+        return <FileText className="w-5 h-5 text-gray-400" />
+    }
+  }
+
+  // 过滤文件
+  const filteredFiles = files.filter((file: RagflowDocument) =>
+    file.name.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
   return (
@@ -193,7 +196,7 @@ export default function KnowledgePage() {
             animate={{ opacity: 1, y: 0 }}
             className="font-display text-3xl font-bold text-white mb-2"
           >
-            知识库管理
+            RAGFLOW 知识库管理
           </motion.h1>
           <motion.p
             initial={{ opacity: 0 }}
@@ -201,108 +204,24 @@ export default function KnowledgePage() {
             transition={{ delay: 0.1 }}
             className="text-gray-400"
           >
-            上传和管理业务知识文件，帮助 AI 更好地理解数据
+            管理 RAGFLOW 知识库文档，上传文件并查看解析进度
           </motion.p>
         </div>
 
-        {/* Datasource Selector */}
-        <motion.div
-          ref={selectRef}
+        {/* Refresh Button */}
+        <motion.button
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.2 }}
-          className="relative"
+          onClick={() => refetch()}
+          className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-gray-400 hover:text-white transition-all"
+          title="刷新列表"
         >
-          {/* Trigger Button */}
-          <button
-            onClick={() => setIsSelectOpen(!isSelectOpen)}
-            disabled={datasources.length === 0}
-            className="flex items-center gap-3 px-4 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-white text-sm transition-all duration-200 min-w-[200px] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <div className="w-8 h-8 rounded-lg bg-accent-primary/20 flex items-center justify-center">
-              <Database className="w-4 h-4 text-accent-primary" />
-            </div>
-            <div className="flex-1 text-left">
-              <div className="font-medium">
-                {selectedDatasource
-                  ? datasources.find((ds) => ds.id === selectedDatasource)?.name
-                  : '选择数据源'}
-              </div>
-            </div>
-            <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${isSelectOpen ? 'rotate-180' : ''}`} />
-          </button>
-
-          {/* Dropdown Menu */}
-          <AnimatePresence>
-            {isSelectOpen && datasources.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -8, scale: 0.95 }}
-                transition={{ duration: 0.15 }}
-                className="absolute top-full right-0 mt-2 w-64 py-2 bg-dark-800/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-xl z-50 max-h-[300px] overflow-auto"
-              >
-                {/* Datasource Options */}
-                {datasources.map((ds) => {
-                  const isSelected = ds.id === selectedDatasource
-                  return (
-                    <button
-                      key={ds.id}
-                      onClick={() => {
-                        setSelectedDatasource(ds.id)
-                        setIsSelectOpen(false)
-                      }}
-                      className={`w-full flex items-center gap-3 px-4 py-3 transition-colors ${
-                        isSelected
-                          ? 'bg-accent-primary/10 text-white'
-                          : 'text-gray-300 hover:bg-white/5 hover:text-white'
-                      }`}
-                    >
-                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                        isSelected ? 'bg-accent-primary/20' : 'bg-white/5'
-                      }`}>
-                        <Database className={`w-4 h-4 ${isSelected ? 'text-accent-primary' : 'text-gray-400'}`} />
-                      </div>
-                      <div className="flex-1 text-left">
-                        <div className={`font-medium text-sm ${isSelected ? 'text-white' : ''}`}>
-                          {ds.name}
-                        </div>
-                        <div className="text-xs text-gray-500">{ds.type.toUpperCase()} · {ds.database}</div>
-                      </div>
-                      {isSelected && (
-                        <CheckCircle2 className="w-4 h-4 text-accent-primary" />
-                      )}
-                    </button>
-                  )
-                })}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
+          <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
+        </motion.button>
       </div>
 
-      {/* No Datasource State */}
-      {datasources.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card p-12 text-center"
-        >
-          <Database className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <h3 className="font-display text-xl font-semibold text-white mb-2">
-            暂无数据源
-          </h3>
-          <p className="text-gray-400 mb-6">
-            请先创建数据源，再上传相关知识文件
-          </p>
-          <Link to="/datasources/new" className="btn-primary inline-flex">
-            添加数据源
-          </Link>
-        </motion.div>
-      ) : (
-        <>
-          {/* Upload Area */}
-          <motion.div
+      {/* Upload Area */}
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}
@@ -339,7 +258,7 @@ export default function KnowledgePage() {
           </h3>
 
           <p className="text-gray-400 text-sm mb-4">
-            支持格式: TXT, Markdown, Word, PDF (最大 10MB)
+            支持格式：TXT, Markdown, Word, PDF (最大 10MB)
           </p>
 
           <label
@@ -361,18 +280,53 @@ export default function KnowledgePage() {
         )}
       </motion.div>
 
-      {/* Search & Filters */}
+      {/* 统计信息 */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="glass-card p-4"
+        >
+          <div className="text-gray-400 text-sm mb-1">总文件数</div>
+          <div className="text-2xl font-bold text-white">{files.length}</div>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35 }}
+          className="glass-card p-4"
+        >
+          <div className="text-gray-400 text-sm mb-1">解析中</div>
+          <div className="text-2xl font-bold text-yellow-400">
+            {files.filter(f => f.status === 'parsing').length}
+          </div>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="glass-card p-4"
+        >
+          <div className="text-gray-400 text-sm mb-1">已完成</div>
+          <div className="text-2xl font-bold text-green-400">
+            {files.filter(f => f.status === 'ready').length}
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Search */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ delay: 0.3 }}
+        transition={{ delay: 0.45 }}
         className="flex items-center gap-4 mb-6"
       >
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
           <input
             type="text"
-            placeholder="搜索知识文件..."
+            placeholder="搜索文件..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-primary/50"
@@ -393,11 +347,11 @@ export default function KnowledgePage() {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.4 }}
+          transition={{ delay: 0.5 }}
           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
         >
           <AnimatePresence mode="popLayout">
-            {filteredFiles.map((file: KnowledgeFile, index: number) => (
+            {filteredFiles.map((file: RagflowDocument, index: number) => (
               <motion.div
                 key={file.id}
                 layout
@@ -405,26 +359,19 @@ export default function KnowledgePage() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 transition={{ delay: index * 0.05 }}
-                className="glass-card-hover p-5 group relative cursor-pointer"
-                onClick={() => handlePreview(file)}
+                className="glass-card-hover p-5 group relative"
               >
                 {/* Actions */}
                 <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handlePreview(file)
-                    }}
+                    onClick={() => setPreviewFile(file)}
                     className="p-2 text-gray-500 hover:text-accent-primary hover:bg-accent-primary/10 rounded-lg transition-colors"
                     title="预览"
                   >
                     <Eye className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setDeleteId(file.id)
-                    }}
+                    onClick={() => setDeleteId(file.id)}
                     className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
                     title="删除"
                   >
@@ -435,59 +382,61 @@ export default function KnowledgePage() {
                 {/* Icon & Info */}
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-                    {getFileIcon(file.file_type)}
+                    {getFileIcon(file.type)}
                   </div>
                   <div className="flex-1 min-w-0">
                     <h4 className="font-display font-medium text-white truncate mb-1">
-                      {file.title || file.filename}
+                      {file.name}
                     </h4>
-                    <p className="text-gray-400 text-xs truncate">{file.filename}</p>
+                    <p className="text-gray-400 text-xs">
+                      {formatSize(file.size)} · {file.type.toUpperCase()}
+                    </p>
                   </div>
                 </div>
 
-                {/* Meta */}
-                <div className="flex items-center gap-4 mt-4 text-xs text-gray-500">
-                  <div className="flex items-center gap-1">
-                    <HardDrive className="w-3.5 h-3.5" />
-                    <span>{formatSize(file.file_size)}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>{formatDate(file.created_at)}</span>
-                  </div>
-                </div>
-
-                {/* Category Badge */}
-                <div className="mt-3 flex items-center gap-2">
-                  <span className={`
-                    px-2 py-0.5 text-xs font-medium rounded-md
-                    ${file.category === 'curated'
-                      ? 'bg-accent-primary/20 text-accent-primary'
-                      : 'bg-white/10 text-gray-400'
-                    }
-                  `}>
-                    {file.category === 'curated' ? '精选' : '原始'}
-                  </span>
-                  {file.sub_category && (
-                    <span className="px-2 py-0.5 text-xs bg-white/5 text-gray-500 rounded-md">
-                      {file.sub_category}
-                    </span>
-                  )}
-                </div>
-
-                {/* Tags */}
-                {file.tags && file.tags.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1">
-                    {file.tags.slice(0, 3).map((tag: string, i: number) => (
-                      <span
-                        key={i}
-                        className="px-2 py-0.5 text-xs bg-white/5 text-gray-500 rounded"
-                      >
-                        {tag}
-                      </span>
-                    ))}
+                {/* 状态和进度 */}
+                {file.status === 'parsing' && (
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="text-yellow-400">解析中</span>
+                      <span className="text-gray-400">{(file.progress * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-yellow-400 h-full rounded-full transition-all"
+                        style={{ width: `${file.progress * 100}%` }}
+                      />
+                    </div>
                   </div>
                 )}
+
+                {file.status === 'ready' && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <span className="px-2 py-1 text-xs bg-green-400/20 text-green-400 rounded">
+                      已完成
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      {file.chunk_count} 个片段
+                    </span>
+                  </div>
+                )}
+
+                {file.status === 'failed' && (
+                  <div className="mt-3">
+                    <button
+                      onClick={() => parseMutation.mutate([file.id])}
+                      className="px-3 py-1 text-xs bg-red-400/20 text-red-400 rounded hover:bg-red-400/30 transition-colors"
+                    >
+                      重新解析
+                    </button>
+                  </div>
+                )}
+
+                {/* 创建时间 */}
+                <div className="flex items-center gap-1 mt-3 text-xs text-gray-500">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>{formatDate(file.created_at)}</span>
+                </div>
 
                 {/* Preview hint */}
                 <div className="absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -508,11 +457,9 @@ export default function KnowledgePage() {
             知识库为空
           </h3>
           <p className="text-gray-400 mb-6">
-            上传知识文件，帮助 AI 更好地理解您的业务数据
+            上传文件到 RAGFLOW 知识库，开始构建您的知识体系
           </p>
         </motion.div>
-      )}
-        </>
       )}
 
       {/* Preview Modal */}
@@ -529,18 +476,22 @@ export default function KnowledgePage() {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="glass-card w-full max-w-4xl max-h-[80vh] overflow-hidden flex flex-col"
+              className="glass-card w-full max-w-md overflow-hidden flex flex-col"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
               <div className="flex items-center justify-between p-4 border-b border-white/10">
                 <div className="flex items-center gap-3">
-                  {getFileIcon(previewFile.file_type)}
+                  <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center">
+                    {getFileIcon(previewFile.type)}
+                  </div>
                   <div>
                     <h3 className="font-display font-semibold text-white">
-                      {previewFile.title || previewFile.filename}
+                      {previewFile.name}
                     </h3>
-                    <p className="text-gray-400 text-sm">{previewFile.filename}</p>
+                    <p className="text-gray-400 text-sm">
+                      {formatSize(previewFile.size)}
+                    </p>
                   </div>
                 </div>
                 <button
@@ -552,21 +503,46 @@ export default function KnowledgePage() {
               </div>
 
               {/* Content */}
-              <div className="flex-1 overflow-auto p-6">
-                <pre className="text-sm text-gray-300 whitespace-pre-wrap font-mono">
-                  {previewContent}
-                </pre>
+              <div className="p-6">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-400 text-sm">状态</span>
+                    <span className={`px-2 py-1 text-xs rounded ${getStatusBg(previewFile.status)}`}>
+                      {getStatusText(previewFile.status)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-400 text-sm">解析进度</span>
+                    <span className="text-white text-sm">{(previewFile.progress * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-400 text-sm">片段数</span>
+                    <span className="text-white text-sm">{previewFile.chunk_count}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-400 text-sm">上传时间</span>
+                    <span className="text-white text-sm">{formatDate(previewFile.created_at)}</span>
+                  </div>
+                </div>
+
+                {previewFile.status === 'failed' && (
+                  <button
+                    onClick={() => {
+                      parseMutation.mutate([previewFile.id])
+                      setPreviewFile(null)
+                    }}
+                    className="w-full mt-4 px-4 py-2 bg-red-500/20 border border-red-500/30 text-red-400 font-medium rounded-xl hover:bg-red-500/30 transition-colors"
+                  >
+                    重新解析
+                  </button>
+                )}
               </div>
 
               {/* Footer */}
-              <div className="flex items-center justify-between p-4 border-t border-white/10 bg-white/5">
-                <div className="flex items-center gap-4 text-sm text-gray-400">
-                  <span>{formatSize(previewFile.file_size)}</span>
-                  <span>{previewFile.use_count} 次使用</span>
-                </div>
+              <div className="p-4 border-t border-white/10 bg-white/5">
                 <button
                   onClick={() => setPreviewFile(null)}
-                  className="btn-secondary"
+                  className="w-full btn-secondary"
                 >
                   关闭
                 </button>
@@ -597,7 +573,7 @@ export default function KnowledgePage() {
                 确认删除文件
               </h3>
               <p className="text-gray-400 mb-6">
-                确定要删除「{files.find((f: KnowledgeFile) => f.id === deleteId)?.filename}」吗？此操作不可撤销。
+                确定要删除「{files.find((f: RagflowDocument) => f.id === deleteId)?.name}」吗？此操作不可撤销。
               </p>
               <div className="flex gap-3">
                 <button
