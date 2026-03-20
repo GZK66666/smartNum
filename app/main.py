@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core import get_settings
 from app.models.database import init_db, close_db
-from app.routers import datasources, sessions, auth, knowledge
+from app.routers import datasources, sessions, auth, knowledge, ragflow
 from app.services.checkpointer import init_checkpointer, close_checkpointer
 
 settings = get_settings()
@@ -68,6 +68,7 @@ app.include_router(auth.router)
 app.include_router(datasources.router)
 app.include_router(sessions.router)
 app.include_router(knowledge.router)
+app.include_router(ragflow.router)
 
 
 # 健康检查接口
