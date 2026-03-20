@@ -161,17 +161,11 @@ class DoneEvent(SSEEvent):
 
 SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分析数据库中的数据。
 
-## 查询指南
-
-每个数据源可能有查询指南文档，包含表说明、业务规则、SQL参考等。
-在查询数据前，建议先查阅查询指南：`explore_query_guide("ls -la")`
-不确定业务逻辑时，务必查阅查询指南。
-
 ## 工具
 
-### explore_query_guide
-浏览查询指南文档。使用 shell 命令查看内容。
-示例：`ls -la` 列出文件，`cat *.md` 查看内容，`grep "关键词" .` 搜索
+### search_query_guide / explore_query_guide
+查询指南包含业务说明、统计口径、表字段说明等参考信息。
+当遇到业务术语、需要确认计算方式或查找特定概念时，先搜索查询指南。
 
 ### list_tables
 列出数据库中的表。
@@ -203,7 +197,7 @@ async def list_tables(
     返回简洁的表列表，不包含列信息。
 
     Args:
-        datasource_id: 数据源ID
+        datasource_id: 数据源 ID
 
     Returns:
         表名和注释列表（Markdown 格式）
@@ -213,7 +207,7 @@ async def list_tables(
     # 从上下文获取数据库连接参数
     ctx = get_db_context()
     if ctx is None:
-        return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
+        return "错误：未找到数据库连接上下文，请确保在正确的会话中调用"
 
     # 文件类型使用 DuckDB
     if ctx["db_type"] == "file":
@@ -315,7 +309,7 @@ async def get_table_schema(
     建议只查询与用户问题相关的表，避免加载过多信息。
 
     Args:
-        datasource_id: 数据源ID
+        datasource_id: 数据源 ID
         table_name: 表名
 
     Returns:
@@ -326,7 +320,7 @@ async def get_table_schema(
     # 从上下文获取数据库连接参数
     ctx = get_db_context()
     if ctx is None:
-        return "错误: 未找到数据库连接上下文，请确保在正确的会话中调用"
+        return "错误：未找到数据库连接上下文，请确保在正确的会话中调用"
 
     # 文件类型使用 DuckDB
     if ctx["db_type"] == "file":
@@ -342,9 +336,9 @@ async def get_table_schema(
                 break
 
         if not table_info:
-            return f"错误: 表 '{table_name}' 不存在"
+            return f"错误：表 '{table_name}' 不存在"
 
-        lines = [f"# 表结构: {table_name}\n"]
+        lines = [f"# 表结构：{table_name}\n"]
         lines.append(f"**行数**: {table_info.get('row_count', 0)}\n")
         lines.append("\n| 列名 | 类型 | 可空 |")
         lines.append("|------|------|------|")
@@ -374,7 +368,7 @@ async def get_table_schema(
 
     try:
         async with engine.connect() as conn:
-            lines = [f"# 表结构: {table_name}\n"]
+            lines = [f"# 表结构：{table_name}\n"]
 
             if ctx["db_type"] == "mysql":
                 # 获取表注释
@@ -474,7 +468,7 @@ async def get_table_schema(
             return "\n".join(lines)
 
     except Exception as e:
-        return f"错误: 获取表结构失败 - {str(e)}"
+        return f"错误：获取表结构失败 - {str(e)}"
 
     finally:
         await engine.dispose()
@@ -489,7 +483,7 @@ async def run_sql(
     """执行 SQL 查询。
 
     Args:
-        datasource_id: 数据源ID
+        datasource_id: 数据源 ID
         sql: SQL 查询语句（仅支持 SELECT）
         limit: 最大返回行数
 
@@ -712,7 +706,7 @@ async def export_data(
     # 获取列名
     columns = list(data[0].keys())
 
-    # 生成文件内容
+    # 生成内容
     if format == "csv":
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=columns, quoting=csv.QUOTE_MINIMAL)
@@ -883,10 +877,10 @@ async def cleanup_expired_export_files() -> int:
 async def explore_query_guide(
     command: str,
 ) -> str:
-    """浏览查询指南文档。
+    """浏览数据库查询指南文档。
 
-    查询指南包含该数据源的业务规则、数据字典、SQL参考等。
-    在查询数据前，建议先查阅查询指南。
+    查询指南包含该数据库的业务说明、统计口径、表字段说明等参考信息。
+    当需要了解业务含义、确认统计方式或查找特定术语时，使用此工具浏览文档。
 
     常用命令:
     - ls -la : 查看有哪些文档
@@ -894,7 +888,7 @@ async def explore_query_guide(
     - grep "关键词" *.md : 搜索特定内容
 
     Args:
-        command: 要执行的 shell 命令 (支持: ls, cat, grep, head, tail, wc, find)
+        command: 要执行的 shell 命令 (支持：ls, cat, grep, head, tail, wc, find)
 
     Returns:
         命令执行结果
@@ -908,11 +902,11 @@ async def explore_query_guide(
 
     ctx = get_db_context()
     if ctx is None:
-        return "错误: 未找到数据库连接上下文"
+        return "错误：未找到数据库连接上下文"
 
     datasource_id = ctx.get("datasource_id")
     if not datasource_id:
-        return "错误: 未找到数据源ID"
+        return "错误：未找到数据源 ID"
 
     service = QueryGuideService()
     output = service.explore_guide(
@@ -920,6 +914,56 @@ async def explore_query_guide(
         command=command,
     )
     return output
+
+
+@tool
+async def search_query_guide(
+    keyword: str,
+) -> str:
+    """在查询指南中搜索与用户问题相关的信息。
+
+    当需要确认业务规则、统计口径或查找特定概念时，先调用此工具搜索相关内容。
+    此工具会自动在查询指南的所有文档中搜索包含关键词的内容。
+
+    Args:
+        keyword: 搜索关键词，建议使用与用户问题相关的业务术语
+
+    Returns:
+        搜索结果，包含匹配的文件名和相关段落
+
+    Examples:
+        search_query_guide("用户定义")  # 搜索用户相关的定义
+        search_query_guide("GMV 统计口径")  # 搜索 GMV 相关的计算规则
+        search_query_guide("活跃用户")  # 搜索活跃用户的定义
+    """
+    from app.services.query_guide_service import QueryGuideService
+
+    ctx = get_db_context()
+    if ctx is None:
+        return "错误：未找到数据库连接上下文"
+
+    datasource_id = ctx.get("datasource_id")
+    if not datasource_id:
+        return "错误：未找到数据源 ID"
+
+    service = QueryGuideService()
+
+    # 使用 grep 搜索相关内容
+    try:
+        # 先列出所有文件
+        file_list = service.list_guide_structure(datasource_id)
+
+        # 使用 grep 搜索关键词（不区分大小写）
+        grep_command = f'grep -ri "{keyword}" . --include="*.md" --include="*.txt" -A 2 -B 2'
+        grep_result = service.explore_guide(datasource_id, grep_command)
+
+        if "错误" in grep_result or not grep_result.strip() or grep_result == "(无输出)":
+            return f"未在查询指南中找到与 '{keyword}' 相关的内容。\n\n{file_list}"
+
+        return f"# 搜索结果：{keyword}\n\n{grep_result}"
+
+    except Exception as e:
+        return f"搜索失败：{str(e)}"
 
 
 # ==================== DeepAgent 创建 ====================
@@ -960,7 +1004,7 @@ async def get_agent():
         model=llm,
         tools=[
             list_tables, get_table_schema, run_sql, render_chart, export_data,
-            explore_query_guide,
+            explore_query_guide, search_query_guide,
         ],
         system_prompt=SYSTEM_PROMPT,
         checkpointer=_checkpointer,
@@ -1020,7 +1064,7 @@ async def process_query_stream(
         step_counter += 1
         print(f"[Agent] 步骤 {step_counter}: {step_name} - {detail}")
 
-    log_step("开始处理", f"用户问题: {query[:50]}...")
+    log_step("开始处理", f"用户问题：{query[:50]}...")
 
     # 设置数据库连接上下文（供工具函数使用）
     set_db_context(
@@ -1040,7 +1084,7 @@ async def process_query_stream(
 
     # 获取 Agent 实例
     agent = await get_agent()
-    log_step("获取Agent实例", "成功")
+    log_step("获取 Agent 实例", "成功")
 
     # 使用 session_id 作为 thread_id（如果未提供则生成新的）
     thread_id = session_id or str(uuid.uuid4())
@@ -1069,7 +1113,7 @@ async def process_query_stream(
     # 添加数据源上下文
     messages.append({
         "role": "system",
-        "content": f"当前数据源ID: {datasource_id}。调用工具时使用此ID。",
+        "content": f"当前数据源 ID: {datasource_id}。调用工具时使用此 ID。",
     })
 
     # 添加当前问题
