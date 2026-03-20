@@ -237,12 +237,14 @@ class RagflowService:
                         file_info = docs[0]
                         return {
                             "success": True,
-                            "doc_id": file_info.get("id"),
-                            "name": file_info.get("name"),
-                            "status": file_info.get("run"),  # UNSTART, RUNNING, DONE, FAIL
-                            "progress": file_info.get("progress", 0),
-                            "chunk_count": file_info.get("chunk_count", 0),
-                            "created_at": file_info.get("create_date"),
+                            "data": {
+                                "doc_id": file_info.get("id"),
+                                "name": file_info.get("name"),
+                                "status": file_info.get("run"),  # UNSTART, RUNNING, DONE, FAIL
+                                "progress": file_info.get("progress", 0),
+                                "chunk_count": file_info.get("chunk_count", 0),
+                                "created_at": file_info.get("create_date"),
+                            }
                         }
                     else:
                         return {
