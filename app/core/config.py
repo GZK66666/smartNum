@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["*"]
 
+    # RAGFLOW 配置
+    ragflow_api_base: str = "http://172.32.25.1:10001"
+    ragflow_api_key: str = "ragflow-c5NjUxNDcwNWFmZjExZjA5NDBjY2UwNG"
+    ragflow_knowledge_base_id: str = ""  # 全局知识库 ID，需要用户填写
+    ragflow_top_k: int = 5  # 默认返回片段数
+    ragflow_score_threshold: float = 0.5  # 最低相似度阈值
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
