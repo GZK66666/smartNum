@@ -25,6 +25,7 @@ from contextvars import ContextVar
 from langchain_core.tools import tool
 
 from app.core import get_settings
+from app.services.ragflow_service import get_ragflow_service
 
 settings = get_settings()
 
@@ -161,27 +162,30 @@ class DoneEvent(SSEEvent):
 
 SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分析数据库中的数据。
 
-## 工具
+## 可用工具
 
-### explore_query_guide
-使用 shell 命令浏览**当前数据源**的查询指南文档（ls, cat, grep 等）。
-查询指南是一个文件夹，包含多个文档（文档内容可能涵盖业务说明、统计口径、表字段说明等），命令会自动在当前数据源的查询指南文件夹下执行。
+### 知识库查询
+- `search_ragflow` - 在全局知识库中搜索业务规则、数据字典、术语解释等
+- `explore_query_guide` - 浏览当前数据源的查询指南文档（ls, cat, grep 等）
 
-### list_tables
-列出数据库中的表。
+### 数据库查询
+- `list_tables` - 列出数据库中的表
+- `get_table_schema` - 获取表的字段结构
+- `run_sql` - 执行 SELECT 查询
 
-### get_table_schema
-获取表的字段结构。
+### 输出工具
+- `render_chart` - 生成 ECharts 图表
+- `export_data` - 导出数据为 CSV/Excel
 
-### run_sql
-执行 SELECT 查询。
+## 使用指南
 
-### render_chart / export_data
-图表渲染和数据导出。
+1. **理解问题** - 分析用户问题需要哪些信息
+2. **探索知识** - 如需要，先 search_ragflow 了解业务规则/术语
+3. **探索数据** - 使用 explore_query_guide 查看数据源特定文档
+4. **查询数据** - list_tables → get_table_schema → run_sql
+5. **呈现结果** - 用 Markdown 表格展示，需要时可视化
 
-## 输出
-
-数据用 Markdown 表格展示。只执行 SELECT 语句，不查询敏感数据。
+只执行 SELECT 语句，不查询敏感数据。
 """
 
 
@@ -916,6 +920,34 @@ async def explore_query_guide(
     return output
 
 
+@tool
+async def search_ragflow(
+    query: str,
+    top_k: int = 5,
+) -> str:
+    """
+    在全局知识库中搜索相关内容。
+
+    当你需要了解业务规则、统计口径、数据字典、专业术语解释等非结构化知识时调用此工具。
+    知识库包含文档、规范、说明等非结构化信息，通过语义检索找到相关内容。
+
+    Args:
+        query: 搜索关键词或问题
+        top_k: 返回的最相关内容数（默认 5 条）
+
+    Returns:
+        格式化的检索结果，包含相关内容片段
+
+    Examples:
+        search_ragflow("活跃用户的定义")  # 搜索业务术语定义
+        search_ragflow("销售额计算规则")  # 搜索统计口径
+        search_ragflow("用户等级划分")  # 搜索业务规则
+    """
+    service = get_ragflow_service()
+    result = await service.search(query=query, top_k=top_k)
+    return service.format_results(result)
+
+
 # ==================== DeepAgent 创建 ====================
 
 _agent = None
@@ -954,7 +986,7 @@ async def get_agent():
         model=llm,
         tools=[
             list_tables, get_table_schema, run_sql, render_chart, export_data,
-            explore_query_guide,
+            explore_query_guide, search_ragflow,
         ],
         system_prompt=SYSTEM_PROMPT,
         checkpointer=_checkpointer,
