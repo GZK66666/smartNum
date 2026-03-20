@@ -154,6 +154,7 @@ class QueryGuideService:
     def list_guide_structure(self, datasource_id: str) -> str:
         """列出查询指南结构"""
         guide_dir = self._get_guide_dir(datasource_id)
+        uploaded_dir = self._get_uploaded_dir(datasource_id)
 
         if not guide_dir.exists():
             return "查询指南为空"
@@ -167,13 +168,15 @@ class QueryGuideService:
             lines.append("- `notes.md` (手动编辑)\n")
 
         # 列出上传的文档
-        uploaded_dir = self._get_uploaded_dir(datasource_id)
         if uploaded_dir.exists():
             files = [f for f in uploaded_dir.iterdir() if not f.name.startswith('.')]
             if files:
                 lines.append("\n## 📄 上传文档\n")
                 for f in sorted(files):
                     lines.append(f"- `{f.name}`")
+            else:
+                lines.append("\n## 📄 上传文档\n")
+                lines.append("(空)\n")
 
         return "\n".join(lines)
 
