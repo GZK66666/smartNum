@@ -78,7 +78,7 @@ export const authApi = {
 // DataSource API
 export const datasourceApi = {
   list: async () => {
-    const res = await request<ApiResponse<{ id: string; name: string; type: string; host: string; port: number; database: string; status: string; created_at: string }[]>>('/api/datasources')
+    const res = await request<ApiResponse<{ id: string; name: string; type: string; host: string; port: number; database_name: string; db_username: string; schema_name?: string; status: string; created_at: string }[]>>('/api/datasources')
     return res.data || []
   },
 
@@ -101,6 +101,38 @@ export const datasourceApi = {
 
   delete: async (id: string) => {
     const res = await request<ApiResponse<{ deleted_sessions: number }>>(`/api/datasources/${id}`, { method: 'DELETE' })
+    return res.data!
+  },
+
+  update: async (id: string, body: {
+    name: string
+    host?: string
+    port?: number
+    database?: string
+    username?: string
+    password?: string
+    schema_name?: string
+  }) => {
+    const res = await request<ApiResponse<{ id: string; name: string; type: string }>>(`/api/datasources/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+    return res.data!
+  },
+
+  testById: async (id: string, body: {
+    type: string
+    host: string
+    port: number
+    database: string
+    username: string
+    password?: string
+    schema_name?: string
+  }) => {
+    const res = await request<ApiResponse<{ success: boolean; message: string }>>(`/api/datasources/${id}/test`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
     return res.data!
   },
 

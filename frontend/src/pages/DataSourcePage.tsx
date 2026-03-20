@@ -26,8 +26,8 @@ export default function DataSourcePage() {
     type: string
     host?: string
     port?: number
-    database_name?: string
-    db_username?: string
+    database?: string
+    username?: string
     schema_name?: string
   } | null>(null)
 
@@ -126,14 +126,30 @@ export default function DataSourcePage() {
                 {/* Action Buttons */}
                 <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
                   <button
-                    onClick={() => setEditingDatasource(ds)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      // 映射 API 字段到 Drawer 期望的字段
+                      setEditingDatasource({
+                        id: ds.id,
+                        name: ds.name,
+                        type: ds.type,
+                        host: ds.host,
+                        port: ds.port,
+                        database: ds.database_name,
+                        username: ds.db_username,
+                        schema_name: ds.schema_name,
+                      })
+                    }}
                     className="p-2 text-gray-500 hover:text-accent-primary hover:bg-accent-primary/10 rounded-lg transition-all"
                     title="编辑"
                   >
                     <Edit className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => setDeleteId(ds.id)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDeleteId(ds.id)
+                    }}
                     className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all"
                     title="删除"
                   >

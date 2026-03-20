@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime
 from typing import Any, Optional
+from urllib.parse import quote_plus
 from sqlalchemy import text, inspect
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -23,9 +24,13 @@ def get_database_url(
 ) -> str:
     """构建数据库连接 URL"""
     if db_type == "mysql":
-        return f"mysql+aiomysql://{username}:{password}@{host}:{port}/{database}"
+        # 对密码进行 URL 编码，支持特殊字符（包括中文）
+        encoded_password = quote_plus(password)
+        # 添加 charset=utf8mb4 支持中文密码
+        return f"mysql+aiomysql://{username}:{encoded_password}@{host}:{port}/{database}?charset=utf8mb4"
     elif db_type == "postgresql":
-        return f"postgresql+asyncpg://{username}:{password}@{host}:{port}/{database}"
+        encoded_password = quote_plus(password)
+        return f"postgresql+asyncpg://{username}:{encoded_password}@{host}:{port}/{database}"
     elif db_type == "sqlite":
         return f"sqlite+aiosqlite:///{database}"
     else:

@@ -1,104 +1,48 @@
-# 智能体查询指南优化
+# 智能体查询指南优化 - 文件系统即工具
 
 **日期**: 2026-03-20
-**目标**: 让智能体在执行查询前主动查阅查询指南
+**设计灵感**: Vercel d0 代理 - "We removed 80% of our agent's tools"
+
+---
+
+## 核心理念
+
+**文件系统是智能体，不是搜索工具。**
+
+参考 Vercel 的 text-to-SQL 代理架构演进：
+- **v1 架构**: 多个专用工具（schema 查询、查询验证、错误恢复、上下文检索...）→ 80% 成功率，慢，脆弱
+- **v2 架构**: 一个工具 `executeCommand`（bash）→ 100% 成功率，3.5 倍快，37% 更少 token
+
+> "Addition by subtraction is real. The best agents might be the ones with the fewest tools."
 
 ---
 
 ## 问题分析
 
-现有实现中，虽然每个数据源已绑定查询指南，但智能体不会主动使用。原因是：
-1. 工具描述过于命令式，缺少使用场景引导
-2. 缺少语义搜索能力，需要手动输入 grep 命令
-3. 系统提示词没有明确引导
+我之前的优化思路是错误的：
+- 添加 `search_query_guide` 专用搜索工具
+- 在工具描述中告诉智能体"何时使用"
+- 本质上是在约束智能体的推理能力
+
+**正确的方式**：
+- 只提供一个工具：`explore_query_guide`（bash 命令执行）
+- 智能体自己决定用 `ls`、`cat`、`grep` 去探索
+- 给智能体最大程度的探索自由
 
 ---
 
 ## 优化方案
 
-遵循 **Smart Agent, Dumb Tool** 原则：
-- 不在系统提示词中加入太多限制
-- 在工具描述、工具定义部分说明使用场景
-- 增加更智能的搜索工具
-- 保持简洁，给智能体最大探索空间
+### 极简系统提示词
 
----
-
-## 已完成的改动
-
-### 1. 优化 `explore_query_guide` 工具描述
-
-**修改位置**: `app/services/agent_service.py`
-
-**改动内容**:
-```python
-@tool
-async def explore_query_guide(command: str) -> str:
-    """浏览数据库查询指南文档。
-
-    查询指南包含该数据库的业务说明、统计口径、表字段说明等参考信息。
-    当需要了解业务含义、确认统计方式或查找特定术语时，使用此工具浏览文档。
-
-    # 原文
-    查询指南包含该数据库的业务规则、数据字典、SQL 参考等具体查询要求。
-    在查询数据前，建议先查阅查询指南。
-    不确定业务逻辑时，务必查阅查询指南。
-    """
-```
-
-**优化点**:
-- 将"建议/务必"等命令式语气改为场景描述
-- 明确说明何时使用此工具（了解业务含义、确认统计方式、查找术语）
-- 让智能体根据场景自行判断是否需要调用
-
----
-
-### 2. 新增 `search_query_guide` 工具
-
-**修改位置**: `app/services/agent_service.py`
-
-**工具定义**:
-```python
-@tool
-async def search_query_guide(keyword: str) -> str:
-    """在查询指南中搜索与用户问题相关的信息。
-
-    当需要确认业务规则、统计口径或查找特定概念时，先调用此工具搜索相关内容。
-    此工具会自动在查询指南的所有文档中搜索包含关键词的内容。
-
-    Args:
-        keyword: 搜索关键词，建议使用与用户问题相关的业务术语
-
-    Returns:
-        搜索结果，包含匹配的文件名和相关段落
-    """
-```
-
-**实现逻辑**:
-1. 调用 `list_guide_structure` 获取文件列表
-2. 使用 `grep -ri` 自动搜索关键词（不区分大小写）
-3. 返回搜索结果，如未找到则返回文件列表提示
-
-**优势**:
-- 智能体只需传入关键词，无需编写 grep 命令
-- 自动在所有文档中搜索，并返回上下文片段
-- 搜索失败时仍提供有用的文件列表信息
-
----
-
-### 3. 优化系统提示词
-
-**修改位置**: `app/services/agent_service.py`
-
-**新版本**:
-```python
-SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分析数据库中的数据。
+```markdown
+你是 SmartNum 数据分析助手，帮助用户查询和分析数据库中的数据。
 
 ## 工具
 
-### search_query_guide / explore_query_guide
+### explore_query_guide
+使用 shell 命令浏览查询指南文档（ls, cat, grep 等）。
 查询指南包含业务说明、统计口径、表字段说明等参考信息。
-当遇到业务术语、需要确认计算方式或查找特定概念时，先搜索查询指南。
 
 ### list_tables
 列出数据库中的表。
@@ -111,75 +55,77 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分
 
 ### render_chart / export_data
 图表渲染和数据导出。
-
-## 输出
-
-数据用 Markdown 表格展示。只执行 SELECT 语句，不查询敏感数据。
-"""
 ```
 
-**优化点**:
-- 将 `search_query_guide` 和 `explore_query_guide` 放在一起说明
-- 用场景化的语言描述何时使用（遇到业务术语、确认计算方式、查找概念）
-- 移除了原 `explore_query_guide` 的示例命令，简化提示词
-- 整体保持简洁，给智能体更多探索空间
+**设计点**：
+- 不告诉智能体"必须先查阅指南"
+- 不约束使用场景
+- 只说明工具是什么，让智能体自己判断
 
----
-
-### 4. 注册新工具
-
-**修改位置**: `app/services/agent_service.py` 中的 `get_agent()` 函数
+### 极简工具描述
 
 ```python
-tools=[
-    list_tables, get_table_schema, run_sql, render_chart, export_data,
-    explore_query_guide, search_query_guide,  # 添加了 search_query_guide
-],
+@tool
+async def explore_query_guide(command: str) -> str:
+    """使用 shell 命令浏览查询指南文档。
+
+    查询指南包含该数据库的业务说明、统计口径、表字段说明等参考信息。
+    你可以使用任何 shell 命令来探索内容。
+
+    常用命令:
+    - ls -la : 查看有哪些文档
+    - cat *.md : 阅读文档内容
+    - grep "关键词" . -r : 搜索特定内容
+    - head -20 xxx.md : 查看文件前 20 行
+    """
 ```
 
----
-
-## 使用示例
-
-### 场景 1：用户问"什么是活跃用户？"
-
-**预期智能体行为**:
-1. 调用 `search_query_guide(keyword="活跃用户")` 搜索定义
-2. 找到相关文档后，基于查询指南回答
-
-### 场景 2：用户问"GMV 怎么计算的？"
-
-**预期智能体行为**:
-1. 调用 `search_query_guide(keyword="GMV")` 或 `search_query_guide(keyword="计算口径")`
-2. 找到统计规则后，生成正确的 SQL
-
-### 场景 3：用户想了解某个数据源有哪些文档
-
-**预期智能体行为**:
-1. 调用 `explore_query_guide(command="ls -la")` 列出文件
-2. 根据文件名判断哪些文档可能有用
+**设计点**：
+- 不限制命令列表（只给示例）
+- 强调"可以使用任何 shell 命令"
+- 给智能体最大探索空间
 
 ---
 
-## 后续建议
+## 预期行为
 
-1. **测试验证**: 观察智能体在实际问题中的工具调用行为
-2. **工具描述迭代**: 根据实际使用情况，微调工具描述中的场景说明
-3. **考虑添加 RAG**: 如果查询指南文档很多，可以考虑添加向量检索，让搜索更智能
+当用户问"什么是活跃用户？"时，智能体可能：
 
----
+```
+1. explore_query_guide("ls -la")           # 先看看有什么文档
+2. explore_query_guide("cat 业务说明.md")   # 阅读相关文档
+3. explore_query_guide("grep -r '活跃' .")  # 或直接搜索关键词
+4. run_sql(...)                             # 基于理解生成 SQL
+```
 
-## 文件变更清单
+或者智能体可能选择：
+- 直接用 `grep -r "活跃用户" .` 一步到位
+- 或者先 `list_tables()` 了解表结构
 
-| 文件 | 变更类型 | 说明 |
-|------|----------|------|
-| `app/services/agent_service.py` | 修改 | 优化工具描述、新增 `search_query_guide` 工具、更新系统提示词 |
+**关键是：让智能体自己决定探索策略，而不是我们替它做决定。**
 
 ---
 
 ## 设计原则总结
 
-1. **Smart Agent**: 智能体自行决定何时查阅指南，不强制
-2. **Dumb Tool**: 工具描述清晰说明使用场景，但不限制用法
-3. **简洁优先**: 系统提示词保持简短，避免过多规则
-4. **渐进增强**: 在现有架构上增加搜索能力，不改变整体逻辑
+| 原则 | 实现 |
+|------|------|
+| **Fewest tools** | 只保留一个 bash 工具，不加专用搜索 |
+| **Don't constrain reasoning** | 不告诉智能体"必须先查指南" |
+| **File system is the agent** | 查询指南就是文件，智能体用 Unix 命令探索 |
+| **Build for the model you'll have** | 相信 Opus 4.6 的推理能力，不做过度防护 |
+
+---
+
+## 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `app/services/agent_service.py` | 简化系统提示词、简化 `explore_query_guide` 描述、移除 `search_query_guide` |
+
+---
+
+## 参考
+
+- [Vercel: We removed 80% of our agent's tools](https://vercel.com/blog/we-removed-80-percent-of-our-agents-tools)
+- 关键洞察："Models are getting smarter and context windows are getting larger, so maybe the best agent architecture is almost no architecture at all."

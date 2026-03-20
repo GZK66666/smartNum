@@ -106,6 +106,7 @@ class DataSourceService:
             return None
 
         # 测试新连接（如果有修改连接信息，且不是文件类型）
+        # 空字符串视为未修改
         if datasource.type != "file" and (host or port or database or username or password):
             conn_result = await test_database_connection(
                 db_type=datasource.type,
@@ -119,20 +120,20 @@ class DataSourceService:
             if not conn_result["success"]:
                 raise ValueError(f"连接测试失败：{conn_result['message']}")
 
-        # 更新字段
-        if name is not None:
+        # 更新字段 - 空字符串不视为有效值，不会覆盖原有数据
+        if name is not None and name != "":
             datasource.name = name
-        if host is not None:
+        if host is not None and host != "":
             datasource.host = host
-        if port is not None:
+        if port is not None and port != 0:
             datasource.port = port
-        if database is not None:
+        if database is not None and database != "":
             datasource.database_name = database
-        if username is not None:
+        if username is not None and username != "":
             datasource.db_username = username
-        if password is not None:
+        if password is not None and password != "":
             datasource.db_password = password
-        if schema_name is not None:
+        if schema_name is not None and schema_name != "":
             datasource.schema_name = schema_name
         if file_path is not None:
             datasource.file_path = file_path
@@ -153,6 +154,11 @@ class DataSourceService:
             from app.services.file_datasource_service import FileDatasourceService
             service = FileDatasourceService()
             await service.cleanup_datasource_files(datasource_id)
+
+        # 清理查询指南文件
+        from app.services.query_guide_service import QueryGuideService
+        guide_service = QueryGuideService()
+        await guide_service.cleanup_guide_files(datasource_id)
 
         await self.db.delete(datasource)
         await self.db.flush()

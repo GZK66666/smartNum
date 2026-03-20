@@ -163,9 +163,9 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分
 
 ## 工具
 
-### search_query_guide / explore_query_guide
+### explore_query_guide
+使用 shell 命令浏览查询指南文档（ls, cat, grep 等）。
 查询指南包含业务说明、统计口径、表字段说明等参考信息。
-当遇到业务术语、需要确认计算方式或查找特定概念时，先搜索查询指南。
 
 ### list_tables
 列出数据库中的表。
@@ -877,18 +877,19 @@ async def cleanup_expired_export_files() -> int:
 async def explore_query_guide(
     command: str,
 ) -> str:
-    """浏览数据库查询指南文档。
+    """使用 shell 命令浏览查询指南文档。
 
     查询指南包含该数据库的业务说明、统计口径、表字段说明等参考信息。
-    当需要了解业务含义、确认统计方式或查找特定术语时，使用此工具浏览文档。
+    你可以使用任何 shell 命令来探索内容。
 
     常用命令:
     - ls -la : 查看有哪些文档
-    - cat *.md : 阅读所有文档
-    - grep "关键词" *.md : 搜索特定内容
+    - cat *.md : 阅读文档内容
+    - grep "关键词" . -r : 搜索特定内容
+    - head -20 xxx.md : 查看文件前 20 行
 
     Args:
-        command: 要执行的 shell 命令 (支持：ls, cat, grep, head, tail, wc, find)
+        command: 要执行的 shell 命令
 
     Returns:
         命令执行结果
@@ -896,7 +897,7 @@ async def explore_query_guide(
     Examples:
         explore_query_guide("ls -la")  # 列出所有文档
         explore_query_guide("cat *.md")  # 阅读全部内容
-        explore_query_guide("grep -i '用户' *.md")  # 搜索用户相关内容
+        explore_query_guide("grep -i '用户' . -r")  # 搜索用户相关内容
     """
     from app.services.query_guide_service import QueryGuideService
 
@@ -914,56 +915,6 @@ async def explore_query_guide(
         command=command,
     )
     return output
-
-
-@tool
-async def search_query_guide(
-    keyword: str,
-) -> str:
-    """在查询指南中搜索与用户问题相关的信息。
-
-    当需要确认业务规则、统计口径或查找特定概念时，先调用此工具搜索相关内容。
-    此工具会自动在查询指南的所有文档中搜索包含关键词的内容。
-
-    Args:
-        keyword: 搜索关键词，建议使用与用户问题相关的业务术语
-
-    Returns:
-        搜索结果，包含匹配的文件名和相关段落
-
-    Examples:
-        search_query_guide("用户定义")  # 搜索用户相关的定义
-        search_query_guide("GMV 统计口径")  # 搜索 GMV 相关的计算规则
-        search_query_guide("活跃用户")  # 搜索活跃用户的定义
-    """
-    from app.services.query_guide_service import QueryGuideService
-
-    ctx = get_db_context()
-    if ctx is None:
-        return "错误：未找到数据库连接上下文"
-
-    datasource_id = ctx.get("datasource_id")
-    if not datasource_id:
-        return "错误：未找到数据源 ID"
-
-    service = QueryGuideService()
-
-    # 使用 grep 搜索相关内容
-    try:
-        # 先列出所有文件
-        file_list = service.list_guide_structure(datasource_id)
-
-        # 使用 grep 搜索关键词（不区分大小写）
-        grep_command = f'grep -ri "{keyword}" . --include="*.md" --include="*.txt" -A 2 -B 2'
-        grep_result = service.explore_guide(datasource_id, grep_command)
-
-        if "错误" in grep_result or not grep_result.strip() or grep_result == "(无输出)":
-            return f"未在查询指南中找到与 '{keyword}' 相关的内容。\n\n{file_list}"
-
-        return f"# 搜索结果：{keyword}\n\n{grep_result}"
-
-    except Exception as e:
-        return f"搜索失败：{str(e)}"
 
 
 # ==================== DeepAgent 创建 ====================
@@ -1004,7 +955,7 @@ async def get_agent():
         model=llm,
         tools=[
             list_tables, get_table_schema, run_sql, render_chart, export_data,
-            explore_query_guide, search_query_guide,
+            explore_query_guide,
         ],
         system_prompt=SYSTEM_PROMPT,
         checkpointer=_checkpointer,

@@ -29,6 +29,17 @@ class DataSourceCreateRequest(BaseModel):
     schema_name: Optional[str] = Field(None, description="Schema 名称（PostgreSQL）")
 
 
+class DataSourceUpdateRequest(BaseModel):
+    """更新数据源请求"""
+    name: str = Field(..., min_length=1, max_length=100, description="数据源名称")
+    host: Optional[str] = Field(None, description="主机地址")
+    port: Optional[int] = Field(None, ge=1, le=65535, description="端口号")
+    database: Optional[str] = Field(None, description="数据库名称")
+    username: Optional[str] = Field(None, description="数据库用户名")
+    password: Optional[str] = Field(None, description="数据库密码")
+    schema_name: Optional[str] = Field(None, description="Schema 名称（PostgreSQL）")
+
+
 class DataSourceTestRequest(BaseModel):
     """测试连接请求"""
     type: str = Field(..., description="数据库类型")
@@ -36,7 +47,7 @@ class DataSourceTestRequest(BaseModel):
     port: int = Field(..., ge=1, le=65535, description="端口号")
     database: str = Field(..., description="数据库名称")
     username: str = Field(..., description="数据库用户名")
-    password: str = Field(..., description="数据库密码")
+    password: Optional[str] = Field(None, description="数据库密码（可选，未提供时使用数据源存储的密码）")
     schema_name: Optional[str] = Field(None, description="Schema 名称")
 
 
@@ -74,7 +85,9 @@ async def list_datasources(
             "type": ds.type,
             "host": ds.host,
             "port": ds.port,
-            "database": ds.database_name,
+            "database_name": ds.database_name,
+            "db_username": ds.db_username,
+            "schema_name": ds.schema_name,
             "status": "connected" if ds.status == 1 else "disconnected",
             "created_at": ds.created_at,
         }
@@ -237,6 +250,130 @@ async def get_schema(
         )
 
     return {"code": 0, "data": schema_info}
+
+
+@router.put("/{datasource_id}", response_model=dict)
+async def update_datasource(
+    datasource_id: str,
+    request: DataSourceUpdateRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """更新数据源
+
+    - 数据库类型：更新连接信息
+    - 文件类型：只更新名称，忽略其他字段
+    """
+    service = DataSourceService(db, user_id)
+
+    # 检查数据源是否存在
+    datasource = await service.get_datasource(datasource_id)
+    if not datasource:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": ErrorCode.DATASOURCE_NOT_FOUND,
+                "message": "数据源不存在",
+            },
+        )
+
+    try:
+        # 文件类型数据源只更新名称
+        if datasource.type == "file":
+            updated_datasource = await service.update_datasource(
+                datasource_id=datasource_id,
+                name=request.name,
+                host=None,  # 忽略
+                port=None,  # 忽略
+                database=None,  # 忽略
+                username=None,  # 忽略
+                password=None,  # 忽略
+                schema_name=None,
+            )
+        else:
+            # 数据库类型更新所有连接信息
+            # 前端可能发送空字符串，后端应视为未修改
+            updated_datasource = await service.update_datasource(
+                datasource_id=datasource_id,
+                name=request.name,
+                host=request.host if request.host else None,
+                port=request.port if request.port else None,
+                database=request.database if request.database else None,
+                username=request.username if request.username else None,
+                password=request.password if request.password else None,
+                schema_name=request.schema_name if request.schema_name else None,
+            )
+
+        return {
+            "code": 0,
+            "data": {
+                "id": updated_datasource.id,
+                "name": updated_datasource.name,
+                "type": updated_datasource.type,
+                "host": updated_datasource.host,
+                "port": updated_datasource.port,
+                "database": updated_datasource.database_name,
+                "status": "connected",
+            },
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": ErrorCode.DB_CONNECTION_FAILED,
+                "message": str(e),
+            },
+        )
+
+
+@router.post("/{datasource_id}/test", response_model=dict)
+async def test_datasource_connection(
+    datasource_id: str,
+    request: DataSourceTestRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """测试数据源连接"""
+    # 验证数据源归属
+    service = DataSourceService(db, user_id)
+    datasource = await service.get_datasource(datasource_id)
+    if not datasource:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": ErrorCode.DATASOURCE_NOT_FOUND,
+                "message": "数据源不存在",
+            },
+        )
+
+    # 文件类型数据源不需要测试连接
+    if datasource.type == "file":
+        return {"code": 0, "data": {"success": True, "message": "文件数据源无需测试连接"}}
+
+    # 如果请求中未提供密码，使用数据库中存储的密码
+    password = request.password if request.password else datasource.db_password
+
+    result = await test_database_connection(
+        db_type=request.type,
+        host=request.host,
+        port=request.port,
+        database=request.database,
+        username=request.username,
+        password=password,
+        schema_name=request.schema_name,
+    )
+
+    if result["success"]:
+        return {"code": 0, "data": result}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": ErrorCode.DB_CONNECTION_FAILED,
+                "message": result["message"],
+                "details": result.get("details"),
+            },
+        )
 
 
 @router.post("/upload", response_model=dict)
