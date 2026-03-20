@@ -98,6 +98,258 @@ class RagflowService:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
+    # ==================== 知识库文件管理方法 ====================
+
+    async def list_files(self) -> Dict[str, Any]:
+        """
+        获取知识库文件列表
+
+        Returns:
+            文件列表，包含 documents 数组
+        """
+        if not self.kb_id:
+            return {
+                "success": False,
+                "error": "未配置 RAGFLOW 知识库 ID，请在环境变量中设置 RAGFLOW_KNOWLEDGE_BASE_ID",
+            }
+
+        try:
+            client = await self._get_client()
+
+            response = await client.get(
+                f"/api/v1/knowledge_base/{self.kb_id}/documents"
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("code") == 0:
+                    documents = data.get("data", {}).get("documents", [])
+                    return {"success": True, "documents": documents}
+                else:
+                    return {
+                        "success": False,
+                        "error": f"RAGFLOW API 错误：{data.get('message', '未知错误')}",
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"HTTP {response.status_code}: {response.text}",
+                }
+
+        except httpx.TimeoutException:
+            return {"success": False, "error": "RAGFLOW API 请求超时"}
+        except httpx.RequestError as e:
+            return {"success": False, "error": f"RAGFLOW 连接失败：{str(e)}"}
+        except Exception as e:
+            logger.exception(f"RAGFLOW 获取文件列表异常：{e}")
+            return {"success": False, "error": f"RAGFLOW 获取文件列表失败：{str(e)}"}
+
+    async def upload_file(self, file_content: bytes, filename: str) -> Dict[str, Any]:
+        """
+        上传文件到知识库
+
+        Args:
+            file_content: 文件二进制内容
+            filename: 文件名
+
+        Returns:
+            上传结果，包含文件 id 和 name
+        """
+        if not self.kb_id:
+            return {
+                "success": False,
+                "error": "未配置 RAGFLOW 知识库 ID，请在环境变量中设置 RAGFLOW_KNOWLEDGE_BASE_ID",
+            }
+
+        try:
+            client = await self._get_client()
+
+            # 使用 multipart/form-data 上传
+            files = {"file": (filename, file_content)}
+            response = await client.post(
+                f"/api/v1/knowledge_base/{self.kb_id}/documents/upload",
+                files=files,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("code") == 0:
+                    result = data.get("data", {})
+                    return {
+                        "success": True,
+                        "doc_id": result.get("id"),
+                        "name": result.get("name"),
+                        "status": result.get("status"),
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"RAGFLOW API 错误：{data.get('message', '未知错误')}",
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"HTTP {response.status_code}: {response.text}",
+                }
+
+        except httpx.TimeoutException:
+            return {"success": False, "error": "RAGFLOW API 请求超时"}
+        except httpx.RequestError as e:
+            return {"success": False, "error": f"RAGFLOW 连接失败：{str(e)}"}
+        except Exception as e:
+            logger.exception(f"RAGFLOW 上传文件异常：{e}")
+            return {"success": False, "error": f"RAGFLOW 上传文件失败：{str(e)}"}
+
+    async def get_file_status(self, doc_id: str) -> Dict[str, Any]:
+        """
+        获取文件解析状态和进度
+
+        Args:
+            doc_id: 文件 ID
+
+        Returns:
+            文件状态信息，包含 status、progress、chunk_count 等
+        """
+        if not self.kb_id:
+            return {
+                "success": False,
+                "error": "未配置 RAGFLOW 知识库 ID，请在环境变量中设置 RAGFLOW_KNOWLEDGE_BASE_ID",
+            }
+
+        try:
+            client = await self._get_client()
+
+            response = await client.get(
+                f"/api/v1/knowledge_base/{self.kb_id}/documents/{doc_id}"
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("code") == 0:
+                    file_info = data.get("data", {})
+                    return {
+                        "success": True,
+                        "doc_id": file_info.get("id"),
+                        "name": file_info.get("name"),
+                        "status": file_info.get("status"),
+                        "progress": file_info.get("progress"),
+                        "chunk_count": file_info.get("chunk_count"),
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"RAGFLOW API 错误：{data.get('message', '未知错误')}",
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"HTTP {response.status_code}: {response.text}",
+                }
+
+        except httpx.TimeoutException:
+            return {"success": False, "error": "RAGFLOW API 请求超时"}
+        except httpx.RequestError as e:
+            return {"success": False, "error": f"RAGFLOW 连接失败：{str(e)}"}
+        except Exception as e:
+            logger.exception(f"RAGFLOW 获取文件状态异常：{e}")
+            return {"success": False, "error": f"RAGFLOW 获取文件状态失败：{str(e)}"}
+
+    async def delete_file(self, doc_id: str) -> Dict[str, Any]:
+        """
+        删除知识库文件
+
+        Args:
+            doc_id: 文件 ID
+
+        Returns:
+            删除结果
+        """
+        if not self.kb_id:
+            return {
+                "success": False,
+                "error": "未配置 RAGFLOW 知识库 ID，请在环境变量中设置 RAGFLOW_KNOWLEDGE_BASE_ID",
+            }
+
+        try:
+            client = await self._get_client()
+
+            response = await client.delete(
+                f"/api/v1/knowledge_base/{self.kb_id}/documents/{doc_id}"
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("code") == 0:
+                    return {"success": True, "message": "删除成功"}
+                else:
+                    return {
+                        "success": False,
+                        "error": f"RAGFLOW API 错误：{data.get('message', '未知错误')}",
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"HTTP {response.status_code}: {response.text}",
+                }
+
+        except httpx.TimeoutException:
+            return {"success": False, "error": "RAGFLOW API 请求超时"}
+        except httpx.RequestError as e:
+            return {"success": False, "error": f"RAGFLOW 连接失败：{str(e)}"}
+        except Exception as e:
+            logger.exception(f"RAGFLOW 删除文件异常：{e}")
+            return {"success": False, "error": f"RAGFLOW 删除文件失败：{str(e)}"}
+
+    async def parse_file(self, doc_ids: List[str]) -> Dict[str, Any]:
+        """
+        触发文件解析
+
+        Args:
+            doc_ids: 文件 ID 列表
+
+        Returns:
+            解析结果
+        """
+        if not self.kb_id:
+            return {
+                "success": False,
+                "error": "未配置 RAGFLOW 知识库 ID，请在环境变量中设置 RAGFLOW_KNOWLEDGE_BASE_ID",
+            }
+
+        if not doc_ids:
+            return {"success": False, "error": "文件 ID 列表不能为空"}
+
+        try:
+            client = await self._get_client()
+
+            response = await client.post(
+                f"/api/v1/knowledge_base/{self.kb_id}/documents/parse",
+                json={"document_ids": doc_ids},
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("code") == 0:
+                    return {"success": True, "message": "解析任务已提交"}
+                else:
+                    return {
+                        "success": False,
+                        "error": f"RAGFLOW API 错误：{data.get('message', '未知错误')}",
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"HTTP {response.status_code}: {response.text}",
+                }
+
+        except httpx.TimeoutException:
+            return {"success": False, "error": "RAGFLOW API 请求超时"}
+        except httpx.RequestError as e:
+            return {"success": False, "error": f"RAGFLOW 连接失败：{str(e)}"}
+        except Exception as e:
+            logger.exception(f"RAGFLOW 解析文件异常：{e}")
+            return {"success": False, "error": f"RAGFLOW 解析文件失败：{str(e)}"}
+
     def format_results(self, search_result: dict) -> str:
         """
         格式化检索结果为文本
