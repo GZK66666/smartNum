@@ -1,13 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X,
-  FileText,
-  Trash2,
   Loader2,
-  ChevronDown,
-  ChevronUp,
-  Info,
   CheckCircle2,
   XCircle,
 } from 'lucide-react'
@@ -32,16 +27,7 @@ interface Props {
 }
 
 export default function EditDataSourceDrawer({ isOpen, onClose, datasource, onUpdate }: Props) {
-  const [notes, setNotes] = useState('')
-  const [files, setFiles] = useState<Array<{
-    filename: string
-    size: number
-    updated_at: string
-  }>>([])
-  const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [showGuide, setShowGuide] = useState(true)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 基本信息表单状态
   const [basicForm, setBasicForm] = useState({
@@ -57,21 +43,6 @@ export default function EditDataSourceDrawer({ isOpen, onClose, datasource, onUp
   const [testError, setTestError] = useState('')
   const [isTesting, setIsTesting] = useState(false)
   const [hasPasswordFocus, setHasPasswordFocus] = useState(false)
-
-  const loadQueryGuide = async () => {
-    if (!datasource) return
-
-    setIsLoading(true)
-    try {
-      const data = await datasourceApi.getQueryGuide(datasource.id)
-      setNotes(data.notes)
-      setFiles(data.files)
-    } catch (err) {
-      console.error('加载查询指南失败:', err)
-    } finally {
-      setIsLoading(false)
-    }
-  }
 
   // 初始化基本信息表单
   const initBasicForm = () => {
@@ -90,10 +61,9 @@ export default function EditDataSourceDrawer({ isOpen, onClose, datasource, onUp
     setHasPasswordFocus(false)
   }
 
-  // 加载查询指南内容
+  // 加载基本信息
   useEffect(() => {
     if (isOpen && datasource) {
-      loadQueryGuide()
       initBasicForm()
     }
   }, [isOpen, datasource])
@@ -188,11 +158,6 @@ export default function EditDataSourceDrawer({ isOpen, onClose, datasource, onUp
         })
       }
 
-      console.log('[EditDataSourceDrawer] 保存基本信息完成，开始保存查询指南')
-
-      // 保存查询指南
-      await datasourceApi.updateQueryGuideNotes(datasource.id, notes)
-
       console.log('[EditDataSourceDrawer] 保存完成')
 
       onUpdate?.()
@@ -202,38 +167,6 @@ export default function EditDataSourceDrawer({ isOpen, onClose, datasource, onUp
       alert(`保存失败：${err instanceof Error ? err.message : '未知错误'}`)
     } finally {
       setIsSaving(false)
-    }
-  }
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !datasource) return
-
-    try {
-      const result = await datasourceApi.uploadQueryGuideFile(datasource.id, file)
-      setFiles(prev => [...prev, {
-        filename: result.filename,
-        size: result.size,
-        updated_at: new Date().toISOString(),
-      }])
-    } catch (err) {
-      console.error('上传失败:', err)
-    }
-
-    // 清空 input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-  }
-
-  const handleDeleteFile = async (filename: string) => {
-    if (!datasource) return
-
-    try {
-      await datasourceApi.deleteQueryGuideFile(datasource.id, filename)
-      setFiles(prev => prev.filter(f => f.filename !== filename))
-    } catch (err) {
-      console.error('删除失败:', err)
     }
   }
 
@@ -405,109 +338,6 @@ export default function EditDataSourceDrawer({ isOpen, onClose, datasource, onUp
                       </span>
                     )}
                   </div>
-                </div>
-              )}
-            </div>
-
-            {/* 查询指南 */}
-            <div className="p-4">
-              <button
-                onClick={() => setShowGuide(!showGuide)}
-                className="flex items-center justify-between w-full text-sm font-medium text-gray-300 mb-3"
-              >
-                <span>查询指南</span>
-                {showGuide ? (
-                  <ChevronUp className="w-4 h-4" />
-                ) : (
-                  <ChevronDown className="w-4 h-4" />
-                )}
-              </button>
-
-              {showGuide && (
-                <div className="space-y-4">
-                  {/* 提示 */}
-                  <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-300">
-                    <div className="flex items-start gap-2">
-                      <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="font-medium mb-1">查询指南帮助智能体更准确理解您的数据</p>
-                        <p className="text-blue-200/70 mb-1">建议包含以下内容：</p>
-                        <ul className="text-blue-200/70 text-xs list-disc list-inside space-y-0.5 ml-1">
-                          <li>表的字段说明、外键关系</li>
-                          <li>业务指标的计算规则和查询逻辑</li>
-                          <li>数据字典、命名规范</li>
-                          <li>特殊业务规则或注意事项</li>
-                        </ul>
-                        <p className="text-yellow-300/80 mt-2">⚠️ 文档内容越多，查询响应可能越慢，建议按需上传</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {isLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
-                    </div>
-                  ) : (
-                    <>
-                      {/* 已上传文档 */}
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-gray-400">📄 已上传文档</span>
-                          <button
-                            onClick={() => fileInputRef.current?.click()}
-                            className="text-xs text-accent-primary hover:text-accent-secondary"
-                          >
-                            + 上传文档
-                          </button>
-                          <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept=".txt,.md,.docx,.pdf"
-                            onChange={handleFileSelect}
-                            className="hidden"
-                          />
-                        </div>
-
-                        {files.length > 0 ? (
-                          <div className="space-y-1">
-                            {files.map(file => (
-                              <div
-                                key={file.filename}
-                                className="flex items-center justify-between bg-dark-700 rounded-lg px-3 py-2"
-                              >
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                                  <span className="text-sm text-white truncate">{file.filename}</span>
-                                  <span className="text-xs text-gray-500">
-                                    {(file.size / 1024).toFixed(1)}KB
-                                  </span>
-                                </div>
-                                <button
-                                  onClick={() => handleDeleteFile(file.filename)}
-                                  className="text-gray-400 hover:text-red-400"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-xs text-gray-500 text-center py-2">暂无上传文档</p>
-                        )}
-                      </div>
-
-                      {/* 备注说明 */}
-                      <div>
-                        <span className="text-sm text-gray-400 mb-2 block">📝 备注说明</span>
-                        <textarea
-                          value={notes}
-                          onChange={(e) => setNotes(e.target.value)}
-                          placeholder={"# 表说明\n\n## users 表\n用户基础信息表...\n\n## 常用查询参考\n- 查询活跃用户：SELECT * FROM users WHERE status = 1"}
-                          className="w-full h-64 bg-dark-700 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-gray-500 resize-none focus:outline-none focus:border-accent-primary"
-                        />
-                      </div>
-                    </>
-                  )}
                 </div>
               )}
             </div>

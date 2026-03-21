@@ -155,11 +155,6 @@ class DataSourceService:
             service = FileDatasourceService()
             await service.cleanup_datasource_files(datasource_id)
 
-        # 清理查询指南文件
-        from app.services.query_guide_service import QueryGuideService
-        guide_service = QueryGuideService()
-        await guide_service.cleanup_guide_files(datasource_id)
-
         await self.db.delete(datasource)
         await self.db.flush()
         return True

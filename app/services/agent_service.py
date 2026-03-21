@@ -166,7 +166,6 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分
 
 ### 知识库查询
 - `search_ragflow` - 在全局知识库中搜索业务规则、数据字典、术语解释等
-- `explore_query_guide` - 浏览当前数据源的查询指南文档（ls, cat, grep 等）
 
 ### 数据库查询
 - `list_tables` - 列出数据库中的表
@@ -181,9 +180,8 @@ SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分
 
 1. **理解问题** - 分析用户问题需要哪些信息
 2. **探索知识** - 如需要，先 search_ragflow 了解业务规则/术语
-3. **探索数据** - 使用 explore_query_guide 查看数据源特定文档
-4. **查询数据** - list_tables → get_table_schema → run_sql
-5. **呈现结果** - 用 Markdown 表格展示，需要时可视化
+3. **查询数据** - list_tables → get_table_schema → run_sql
+4. **呈现结果** - 用 Markdown 表格展示，需要时可视化
 
 只执行 SELECT 语句，不查询敏感数据。
 """
@@ -875,50 +873,7 @@ async def cleanup_expired_export_files() -> int:
         return result.rowcount
 
 
-# ==================== 查询指南工具 ====================
-
-@tool
-async def explore_query_guide(
-    command: str,
-) -> str:
-    """使用 shell 命令查阅当前数据源的查询指南文件夹。
-
-    查询指南是一个文件夹，里面包含多个文档文件：
-    - notes.md - 人工编写的备注说明
-    - uploaded/* - 上传的参考文档
-
-    你可以像探索普通文件夹一样，使用 ls 查看有哪些文件，用 cat 阅读内容，用 grep 搜索关键词等。
-
-    Args:
-        command: 要执行的 shell 命令（自动在当前数据源的查询指南文件夹下执行）
-
-    Returns:
-        命令执行结果
-
-    Examples:
-        explore_query_guide("ls -la")  # 查看查询指南文件夹中有哪些文档
-        explore_query_guide("ls uploaded/")  # 查看上传了哪些文档
-        explore_query_guide("cat notes.md")  # 阅读备注说明
-        explore_query_guide("grep -r '活跃用户' .")  # 搜索所有文档中关于"活跃用户"的定义
-        explore_query_guide("head -30 uploaded/业务说明.md")  # 查看某个文档的前 30 行
-    """
-    from app.services.query_guide_service import QueryGuideService
-
-    ctx = get_db_context()
-    if ctx is None:
-        return "错误：未找到数据库连接上下文"
-
-    datasource_id = ctx.get("datasource_id")
-    if not datasource_id:
-        return "错误：未找到数据源 ID"
-
-    service = QueryGuideService()
-    output = service.explore_guide(
-        datasource_id=datasource_id,
-        command=command,
-    )
-    return output
-
+# ==================== RAGFLOW 工具 ====================
 
 @tool
 async def search_ragflow(
@@ -986,7 +941,7 @@ async def get_agent():
         model=llm,
         tools=[
             list_tables, get_table_schema, run_sql, render_chart, export_data,
-            explore_query_guide, search_ragflow,
+            search_ragflow,
         ],
         system_prompt=SYSTEM_PROMPT,
         checkpointer=_checkpointer,
