@@ -48,9 +48,7 @@ export default function KnowledgePage() {
       setUploadProgress(prev => ({ ...prev, [file.name]: 0 }))
 
       try {
-        await ragflowApi.uploadFile(file, async (progress) => {
-          setUploadProgress(prev => ({ ...prev, [file.name]: progress }))
-        })
+        await ragflowApi.uploadFile(file)
         queryClient.invalidateQueries({ queryKey: ['ragflow-files'] })
       } catch (error) {
         console.error('Upload failed:', error)
