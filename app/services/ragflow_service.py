@@ -2,6 +2,7 @@
 
 import httpx
 import logging
+import json
 from typing import Optional, List, Dict, Any
 from app.core.config import get_settings
 
@@ -57,14 +58,16 @@ class RagflowService:
             client = await self._get_client()
 
             # 根据 RAGFlow 0.19.1 API，使用检索 API
-            response = await client.post(
+            response = await client.request(
+                "POST",
                 "/api/v1/retrieval",
-                json={
+                content=json.dumps({
                     "dataset_ids": [self.kb_id],
                     "question": query,
                     "top_k": top_k or self.top_k,
                     "similarity_threshold": score_threshold or self.score_threshold,
-                },
+                }),
+                headers={"Content-Type": "application/json"},
             )
 
             if response.status_code == 200:
@@ -291,9 +294,11 @@ class RagflowService:
 
             # 根据 RAGFlow API 文档，使用 DELETE /api/v1/datasets/{dataset_id}/documents
             # 需要传递 ids 数组
-            response = await client.delete(
+            response = await client.request(
+                "DELETE",
                 f"/api/v1/datasets/{self.kb_id}/documents",
-                json={"ids": [doc_id]},
+                content=json.dumps({"ids": [doc_id]}),
+                headers={"Content-Type": "application/json"},
             )
 
             if response.status_code == 200:
@@ -342,9 +347,11 @@ class RagflowService:
             client = await self._get_client()
 
             # 根据 RAGFlow API 文档，body 是 {"document_ids": [...]} 格式
-            response = await client.post(
+            response = await client.request(
+                "POST",
                 f"/api/v1/datasets/{self.kb_id}/chunks",
-                json={"document_ids": doc_ids},
+                content=json.dumps({"document_ids": doc_ids}),
+                headers={"Content-Type": "application/json"},
             )
 
             if response.status_code == 200:
