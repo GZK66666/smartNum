@@ -1,5 +1,5 @@
 -- ============================================================
--- SmartNum V3.1 数据库初始化脚本
+-- SmartNum V3.2 数据库初始化脚本
 -- 数据库：MySQL 8.0+
 -- 字符集：utf8mb4
 -- ============================================================
@@ -57,7 +57,6 @@ CREATE TABLE datasources (
     schema_name VARCHAR(100) COMMENT 'Schema 名称 (PostgreSQL)',
     file_path VARCHAR(500) COMMENT '原始文件路径（文件类型）',
     tables_info JSON COMMENT '转换后的表信息（文件类型）',
-    query_guide_updated_at DATETIME COMMENT '查询指南最后更新时间',
     status TINYINT DEFAULT 1 COMMENT '状态：1-正常 0-禁用',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -68,7 +67,7 @@ CREATE TABLE datasources (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据源配置表';
 
 -- ============================================================
--- 会话表（V3.1 增强版）
+-- 会话表
 -- ============================================================
 DROP TABLE IF EXISTS sessions;
 CREATE TABLE sessions (
@@ -127,35 +126,6 @@ CREATE TABLE export_files (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='导出文件表';
 
 -- ============================================================
--- 知识文件表
--- ============================================================
-DROP TABLE IF EXISTS knowledge_files;
-CREATE TABLE knowledge_files (
-    id VARCHAR(36) PRIMARY KEY COMMENT '文件 ID (UUID)',
-    datasource_id VARCHAR(36) COMMENT '关联数据源 ID（为空表示全局知识）',
-    filename VARCHAR(255) NOT NULL COMMENT '原始文件名',
-    file_type VARCHAR(20) NOT NULL COMMENT '文件扩展名: txt/md/docx/pdf',
-    category VARCHAR(20) NOT NULL COMMENT '类别: raw/curated',
-    sub_category VARCHAR(50) COMMENT '子类别: indicators/rules/datasets/glossary',
-    raw_path VARCHAR(500) COMMENT '原始文件路径',
-    processed_path VARCHAR(500) COMMENT '处理后文本路径',
-    title VARCHAR(200) COMMENT '标题（可编辑）',
-    description TEXT COMMENT '描述（可编辑）',
-    tags JSON COMMENT '标签列表',
-    auto_summary TEXT COMMENT '自动摘要',
-    mentioned_tables JSON COMMENT '提到的表名',
-    file_size INT COMMENT '文件大小（字节）',
-    use_count INT DEFAULT 0 COMMENT '使用次数',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    INDEX idx_knowledge_datasource (datasource_id),
-    INDEX idx_knowledge_category (category),
-    INDEX idx_knowledge_sub_category (sub_category),
-    CONSTRAINT fk_knowledge_datasource
-        FOREIGN KEY (datasource_id) REFERENCES datasources(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识文件表';
-
--- ============================================================
 -- 触发器：更新会话最后活跃时间 & 消息计数
 -- ============================================================
 DROP TRIGGER IF EXISTS trg_update_session_active;
@@ -209,6 +179,20 @@ END$$
 DELIMITER ;
 
 -- ============================================================
+-- 存储过程：清理过期导出文件
+-- ============================================================
+DROP PROCEDURE IF EXISTS sp_cleanup_expired_files;
+DELIMITER $$
+CREATE PROCEDURE sp_cleanup_expired_files()
+BEGIN
+    DELETE FROM export_files
+    WHERE expires_at < NOW();
+
+    SELECT ROW_COUNT() AS deleted_count;
+END$$
+DELIMITER ;
+
+-- ============================================================
 -- 完成提示
 -- ============================================================
-SELECT 'SmartNum V3.1 数据库初始化完成！' AS status;
+SELECT 'SmartNum V3.2 数据库初始化完成！' AS status;

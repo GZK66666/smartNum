@@ -50,8 +50,6 @@ class DataSource(Base):
     # 文件数据源字段
     file_path = Column(VARCHAR(500), comment="原始文件路径（文件类型）")
     tables_info = Column(JSON, comment="转换后的表信息（文件类型）")
-    # 查询指南
-    query_guide_updated_at = Column(DateTime, comment="查询指南最后更新时间")
     status = Column(Integer, default=1, comment="状态：1-正常 0-禁用")
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
@@ -142,46 +140,3 @@ class ExportFile(Base):
 
     def __repr__(self):
         return f"<ExportFile(id={self.id}, filename={self.filename})>"
-
-
-class KnowledgeFile(Base):
-    """知识文件模型 - 用于存储知识库文件索引"""
-    __tablename__ = "knowledge_files"
-
-    id = Column(VARCHAR(36), primary_key=True, comment="文件 ID (UUID)")
-    datasource_id = Column(VARCHAR(36), ForeignKey("datasources.id", ondelete="CASCADE"), nullable=True, comment="关联数据源 ID（为空表示全局知识）")
-
-    # 文件信息
-    filename = Column(VARCHAR(255), nullable=False, comment="原始文件名")
-    file_type = Column(VARCHAR(20), nullable=False, comment="文件扩展名: txt/md/docx/pdf")
-    category = Column(VARCHAR(20), nullable=False, comment="类别: raw/curated")
-    sub_category = Column(VARCHAR(50), comment="子类别: indicators/rules/datasets/glossary")
-
-    # 路径
-    raw_path = Column(VARCHAR(500), comment="原始文件路径")
-    processed_path = Column(VARCHAR(500), comment="处理后文本路径")
-
-    # 元数据
-    title = Column(VARCHAR(200), comment="标题（可编辑）")
-    description = Column(Text, comment="描述（可编辑）")
-    tags = Column(JSON, comment="标签列表")
-
-    # 自动提取的信息
-    auto_summary = Column(Text, comment="自动摘要")
-    mentioned_tables = Column(JSON, comment="提到的表名")
-
-    # 统计
-    file_size = Column(Integer, comment="文件大小（字节）")
-    use_count = Column(Integer, default=0, comment="使用次数")
-
-    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
-
-    __table_args__ = (
-        Index("idx_knowledge_datasource", "datasource_id"),
-        Index("idx_knowledge_category", "category"),
-        Index("idx_knowledge_sub_category", "sub_category"),
-    )
-
-    def __repr__(self):
-        return f"<KnowledgeFile(id={self.id}, filename={self.filename})>"

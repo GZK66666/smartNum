@@ -169,3 +169,15 @@ export interface AgentStep {
   input?: Record<string, unknown> | string
   output?: string
 }
+
+// RAGFLOW 知识库类型
+export interface RagflowDocument {
+  id: string
+  name: string
+  type: string  // 文件类型：pdf, docx, md, txt
+  size: number  // 文件大小（字节）
+  status: 'pending' | 'parsing' | 'ready' | 'failed'
+  progress: number  // 解析进度 0-1
+  chunk_count: number  // 分块数量
+  created_at: string
+}

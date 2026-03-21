@@ -16,8 +16,8 @@ import {
   RefreshCw,
   Play,
 } from 'lucide-react'
-import { ragflowApi } from '../services/knowledgeApi'
-import type { RagflowDocument } from '../types/knowledge'
+import { ragflowApi } from '../services/api'
+import type { RagflowDocument } from '../types'
 
 export default function KnowledgePage() {
   const queryClient = useQueryClient()

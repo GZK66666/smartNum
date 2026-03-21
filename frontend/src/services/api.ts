@@ -1,4 +1,4 @@
-import type { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, User, AgentStepEvent } from '../types'
+import type { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, User, AgentStepEvent, RagflowDocument } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
@@ -455,6 +455,52 @@ export function createAgentMessageStream(
     callbacks.onError(err.message || '请求失败')
     callbacks.onComplete()
   })
+}
+
+// RAGFLOW 知识库 API
+export const ragflowApi = {
+  listFiles: async (): Promise<RagflowDocument[]> => {
+    const res = await request<ApiResponse<RagflowDocument[]>>('/api/ragflow/files')
+    return res.data || []
+  },
+
+  uploadFile: async (file: File): Promise<{ doc_id: string; name: string; status: string }> => {
+    const token = localStorage.getItem('token')
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE}/api/ragflow/files/upload`, {
+      method: 'POST',
+      headers: {
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+      body: formData,
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      const error = data.detail || data
+      throw new ApiError(
+        error.code || response.status,
+        error.message || '上传失败',
+        response.status
+      )
+    }
+
+    return data.data
+  },
+
+  deleteFile: async (docId: string): Promise<void> => {
+    await request(`/api/ragflow/files/${docId}`, { method: 'DELETE' })
+  },
+
+  parseFiles: async (docIds: string[]): Promise<void> => {
+    await request('/api/ragflow/files/parse', {
+      method: 'POST',
+      body: JSON.stringify(docIds),
+    })
+  },
 }
 
 export { ApiError }

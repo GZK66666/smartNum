@@ -162,19 +162,21 @@ class DoneEvent(SSEEvent):
 
 SYSTEM_PROMPT = """你是 SmartNum 数据分析助手，帮助用户查询和分析数据库中的数据。
 
-根据用户问题，自由组合调用上述工具，完成用户的请求。
+你可以通过查询数据库中的结构化数据和知识库中的非结构化数据，获取回答用户问题所需的信息，并通过可视化和导出工具展示或导出结果。
+
+根据用户问题，自由组合调用下述工具，完成用户的请求。
 
 ## 可用工具
 
 ### 知识库查询
-- `search_ragflow` - 在全局知识库中搜索业务规则、数据字典、术语解释等
+- `search_ragflow` - 检索知识库中的文档资料
 
 ### 数据库查询
 - `list_tables` - 列出数据库中的表
 - `get_table_schema` - 获取表的字段结构
 - `run_sql` - 执行 SELECT 查询
 
-### 输出工具
+### 数据可视化/数据导出
 - `render_chart` - 生成 ECharts 图表
 - `export_data` - 导出数据为 CSV/Excel
 """
@@ -874,10 +876,9 @@ async def search_ragflow(
     top_k: int = 5,
 ) -> str:
     """
-    在全局知识库中搜索相关内容。
+    在知识库中搜索相关内容。
 
-    当你需要了解业务规则、统计口径、数据字典、专业术语解释等非结构化知识时调用此工具。
-    知识库包含文档、规范、说明等非结构化信息，通过语义检索找到相关内容。
+    知识库包含企业规章制度、政策法规、公文文件等文档资料，通过语义检索找到相关内容。
 
     Args:
         query: 搜索关键词或问题
@@ -887,13 +888,13 @@ async def search_ragflow(
         格式化的检索结果，包含相关内容片段
 
     Examples:
-        search_ragflow("活跃用户的定义")  # 搜索业务术语定义
-        search_ragflow("销售额计算规则")  # 搜索统计口径
-        search_ragflow("用户等级划分")  # 搜索业务规则
+        search_ragflow("差旅费报销标准")  # 搜索规章制度
+        search_ragflow("政府采购流程")  # 搜索政策文件
+        search_ragflow("员工考勤管理规定")  # 搜索管理制度
     """
     service = get_ragflow_service()
     result = await service.search(query=query, top_k=top_k)
-    return service.format_results(result)
+    return service.format_results(result, top_k=top_k)
 
 
 # ==================== DeepAgent 创建 ====================

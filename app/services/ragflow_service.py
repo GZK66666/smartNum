@@ -128,9 +128,11 @@ class RagflowService:
 
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"RAGFLOW API 返回数据：{data}")
                 if data.get("code") == 0:
                     # API 返回的是 docs 数组
                     docs = data.get("data", {}).get("docs", [])
+                    logger.info(f"获取到 {len(docs)} 个文档")
                     return {"success": True, "documents": docs}
                 else:
                     return {
@@ -377,12 +379,13 @@ class RagflowService:
             logger.exception(f"RAGFLOW 解析文件异常：{e}")
             return {"success": False, "error": f"RAGFLOW 解析文件失败：{str(e)}"}
 
-    def format_results(self, search_result: dict) -> str:
+    def format_results(self, search_result: dict, top_k: Optional[int] = None) -> str:
         """
         格式化检索结果为文本
 
         Args:
             search_result: search() 方法返回的结果
+            top_k: 最大返回条数（用于截断）
 
         Returns:
             格式化的文本，适合发送给 LLM
@@ -394,15 +397,24 @@ class RagflowService:
         if not chunks:
             return "未在知识库中找到相关内容"
 
+        # 如果指定了 top_k，手动截断结果
+        if top_k and len(chunks) > top_k:
+            chunks = chunks[:top_k]
+
         lines = [f"# 知识库检索结果（查询：{search_result.get('query', '')}）\n"]
         lines.append(f"找到 {len(chunks)} 条相关内容:\n")
 
         for i, chunk in enumerate(chunks, 1):
             content = chunk.get("content", "")
-            score = chunk.get("score", 0)
-            doc_name = chunk.get("document_name", "未知文档")
+            # RAGFLOW 可能返回 similarity 或 score 字段，值域可能是 0-1 或 0-100
+            score = chunk.get("similarity") or chunk.get("score") or 0
+            doc_name = chunk.get("document_name") or chunk.get("doc_name") or "未知文档"
 
-            lines.append(f"### 相关内容 {i} (相似度：{score:.2%})")
+            # 如果 score 大于 1，假设是百分比格式（0-100），否则假设是 0-1 格式
+            if score > 1:
+                lines.append(f"### 相关内容 {i} (相似度：{score:.1f}%)")
+            else:
+                lines.append(f"### 相关内容 {i} (相似度：{score:.2%})")
             lines.append(f"**来源**: {doc_name}\n")
             lines.append(content)
             lines.append("")
